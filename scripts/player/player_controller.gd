@@ -237,14 +237,19 @@ func _physics_process_3d(delta: float, direction: Vector3, speed: float, raw_inp
 		var grounded_threshold := 3.0  # Matches clamp buffer + some margin
 		var is_grounded := dist_to_wall < grounded_threshold
 		
+		# Check if player is in a portal hole (for physics exemptions)
+		var in_portal := _is_in_portal_hole(global_position, current_room)
+		
 		# Apply gravity toward the wall
 		if not is_grounded:
 			velocity += grav_dir * gravity * delta
 		else:
-			# On the wall - reduce velocity toward wall
-			var vel_toward_wall := velocity.dot(grav_dir)
-			if vel_toward_wall > 0:
-				velocity -= grav_dir * vel_toward_wall * 0.9
+			# On the wall - reduce velocity toward wall UNLESS in portal hole
+			# Portal holes need to allow outward velocity to pass through
+			if not in_portal:
+				var vel_toward_wall := velocity.dot(grav_dir)
+				if vel_toward_wall > 0:
+					velocity -= grav_dir * vel_toward_wall * 0.9
 		
 		# Clamp player to stay inside sphere (portal holes in mesh will allow traversal)
 		# Skip clamping if aligned with a portal hole (allows natural walk-through)
@@ -253,7 +258,7 @@ func _physics_process_3d(delta: float, direction: Vector3, speed: float, raw_inp
 		
 		if current_dist > max_dist:
 			# Only clamp if NOT in a portal hole
-			if not _is_in_portal_hole(global_position, current_room):
+			if not in_portal:
 				global_position = room_center + dir_from_center * max_dist
 		
 		# CONSTRUCT PLAYER ORIENTATION from facing vector + gravity up
@@ -570,11 +575,15 @@ func _is_in_portal_hole(pos: Vector3, room: Node) -> bool:
 		
 		# Method 2: Check if player is NEAR the portal's position (within hole radius)
 		# This catches cases where player is standing ON the portal before entering the box
+		# Use XYZ distance - the portal position is on the sphere surface
 		var portal_radius = portal.get("portal_radius")
-		if portal_radius != null:
-			var dist_to_portal: float = pos.distance_to(portal.global_position)
-			# Use a generous margin (1.5x radius) to ensure player falls through
-			if dist_to_portal < portal_radius * 2.5:
-				return true
+		if portal_radius == null:
+			portal_radius = 2.0  # Default portal radius
+		
+		var dist_to_portal: float = pos.distance_to(portal.global_position)
+		# Use a generous margin (4x radius) to ensure player can walk through
+		# This is needed because we're testing distance to portal CENTER, not edge
+		if dist_to_portal < portal_radius * 4.0:
+			return true
 			
 	return false

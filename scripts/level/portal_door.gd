@@ -64,6 +64,10 @@ var _is_ready_for_transitions: bool = false
 var _player_cooldowns: Dictionary = {}
 const PORTAL_COOLDOWN: float = 2.0  # Seconds before player can use ANY portal again
 
+## Track entry SIDE relative to portal surface (fixes oscillation bug)
+## Dictionary mapping player node -> entry side (true = in front of portal surface, false = behind)
+var _player_entry_side: Dictionary = {}
+
 signal player_transitioned(from_w: float, to_w: float)
 
 func _ready() -> void:
@@ -241,48 +245,17 @@ func _on_transition_body_entered(body: Node3D) -> void:
 	if body not in _players_in_zone:
 		_players_in_zone.append(body)
 		
-		# Sync destination room's W to match source room's W
-		# This makes BOTH rooms visible at the same W-slice so player can see through!
-		if target_portal and is_instance_valid(target_portal):
-			var dest_room = target_portal.source_room
-			if dest_room and dest_room.get("position_4d") != null and not _is_w_synced:
-				# Save original W for later restoration
-				_target_original_w = dest_room.position_4d.w
-				_is_w_synced = true
-				
-				# Get current slicer W (player's current slice)
-				var slicer = get_tree().get_first_node_in_group("slicer_4d")
-				var current_w: float = 0.0
-				if slicer and slicer.get("slice_w") != null:
-					current_w = slicer.slice_w
-				
-				# Set destination room to same W as current slice
-				var old_pos: Vector4 = dest_room.position_4d
-				dest_room.position_4d = Vector4(old_pos.x, old_pos.y, old_pos.z, current_w)
-				
-				# PHASE 1 FIX: Also set _position_4d.w directly as backup
-				# The property setter might not sync to _position_4d correctly
-				if dest_room.get("_position_4d") != null:
-					dest_room._position_4d.w = current_w
-					print("[PortalDoor] Direct _position_4d.w set to %.1f" % current_w)
-				
-				# Force update so room renders at new W
-				if dest_room.has_method("update_slice"):
-					dest_room.update_slice(current_w)
-				
-				# PHASE 1 FIX: Force mesh visibility directly
-				if dest_room.get("mesh_instance") != null and dest_room.mesh_instance != null:
-					dest_room.mesh_instance.visible = true
-					print("[PortalDoor] Forced mesh_instance.visible = true")
-				
-				if slicer and slicer.has_method("update_all_objects"):
-					slicer.update_all_objects()
-				
-				# DEBUG: Verify the W was actually changed
-				var verify_w: float = dest_room._position_4d.w if dest_room.get("_position_4d") != null else -999.0
-				print("[PortalDoor] W-SYNC: %s W changed %.1f -> %.1f (verified _position_4d.w=%.1f)" % [dest_room.name, _target_original_w, current_w, verify_w])
+		# NOTE: W-sync is now handled centrally by LevelGenerator (host room + adjacent rooms)
+		# The portal no longer needs to sync destination room W on proximity
 		
-		print("[PortalDoor] Player entered portal zone: %s" % name)
+		# Record entry SIDE for crossing detection
+		# Portal local Z after positioning: +Z points toward sphere center (inside room)
+		# -Z points toward destination (outside room / through portal)
+		var rel_pos: Vector3 = body.global_position - global_position
+		var local_z_pos: float = rel_pos.dot(global_transform.basis.z)  # Positive = front/inside, Negative = behind/outside
+		_player_entry_side[body] = local_z_pos > 0.0  # true = entered from inside room (front)
+		
+		print("[PortalDoor] Player entered portal zone: %s (entry_side=%s, local_z=%.2f)" % [name, "INSIDE" if local_z_pos > 0 else "OUTSIDE", local_z_pos])
 
 func _on_transition_body_exited(body: Node3D) -> void:
 	if not body.is_in_group("player"):
@@ -291,11 +264,26 @@ func _on_transition_body_exited(body: Node3D) -> void:
 	if body in _players_in_zone:
 		_players_in_zone.erase(body)
 		
-		# Check which side player exited
+		# Get entry SIDE (which side of portal surface player entered from)
+		var entered_from_inside: bool = _player_entry_side.get(body, true)
+		_player_entry_side.erase(body)
+		
+		# Get exit SIDE (which side player is on now)
 		var rel_pos: Vector3 = body.global_position - global_position
-		var portal_forward: Vector3 = -global_transform.basis.z
-		var forward_dist: float = rel_pos.dot(portal_forward)
-		var passed_through: bool = forward_dist < 0.0
+		var local_z_pos: float = rel_pos.dot(global_transform.basis.z)  # Positive = front/inside, Negative = behind/outside
+		var exited_to_inside: bool = local_z_pos > 0.0
+		
+		# Player CROSSED THROUGH if entry side != exit side
+		# e.g., entered from inside room (front) but exited toward destination (behind)
+		var passed_through: bool = entered_from_inside != exited_to_inside
+		
+		print("[PortalDoor] Player exited zone: %s (entry=%s, exit=%s, local_z=%.2f, crossed=%s)" % [
+			name, 
+			"INSIDE" if entered_from_inside else "OUTSIDE",
+			"INSIDE" if exited_to_inside else "OUTSIDE",
+			local_z_pos,
+			passed_through
+		])
 		
 		if passed_through and target_portal and is_instance_valid(target_portal):
 			# Player walked INTO destination room!
@@ -307,62 +295,46 @@ func _on_transition_body_exited(body: Node3D) -> void:
 				if dest_room.has_method("set_light_enabled"):
 					dest_room.set_light_enabled(true)
 				
-				# 2. Reset destination room to its ORIGINAL W (so it doesn't overlap source room)
-				var old_pos: Vector4 = dest_room.position_4d
-				dest_room.position_4d = Vector4(old_pos.x, old_pos.y, old_pos.z, _target_original_w)
-				if dest_room.get("_position_4d") != null:
-					dest_room._position_4d.w = _target_original_w
-				if dest_room.has_method("update_slice"):
-					dest_room.update_slice(_target_original_w)
-					
-				# 3. Shift PLAYER to the new W coordinate
+				# NOTE: W-sync is now handled by LevelGenerator when player changes rooms
+				# The portal only needs to shift the player's W coordinate
+				
+				# 2. Shift PLAYER to the destination room's original W coordinate
+				# Get original W from LevelGenerator's stored values
+				var dest_original_w: float = 0.0
+				var level_gen = get_tree().get_first_node_in_group("level_generator")
+				if level_gen and level_gen.get("_original_room_w") != null:
+					var dest_room_id: int = dest_room.room_id if dest_room.get("room_id") != null else -1
+					if level_gen._original_room_w.has(dest_room_id):
+						dest_original_w = level_gen._original_room_w[dest_room_id]
+						print("[PortalDoor] Got original W=%.1f for room %d from LevelGenerator" % [dest_original_w, dest_room_id])
+				
 				if body.get("position_4d") != null:
-					# Set .w directly on the player's position_4d property
-					body.position_4d.w = _target_original_w
-					print("[PortalDoor] Shifted Player W to %.1f" % _target_original_w)
+					body.position_4d.w = dest_original_w
+					print("[PortalDoor] Shifted Player W to %.1f" % dest_original_w)
 
-				# Force slicer update
+				# Force slicer update to new W
 				var slicer = get_tree().get_first_node_in_group("slicer_4d")
 				if slicer:
-					slicer.slice_w = _target_original_w
+					slicer.slice_w = dest_original_w
 					if slicer.has_method("update_all_objects"):
 						slicer.update_all_objects()
 				
-				# 4. VELOCITY BOOST: Propel player toward destination room's center
-				# This ensures a smooth transition instead of slowly falling
+				# 3. VELOCITY BOOST: Propel player toward destination room's center
 				var dest_center: Vector3 = dest_room.global_position
 				var player_pos: Vector3 = body.global_position
 				var dir_to_dest: Vector3 = (dest_center - player_pos).normalized()
 				
-				# Strong initial velocity toward the destination room's floor
 				if body.get("velocity") != null:
-					body.velocity = dir_to_dest * 25.0  # Strong push toward center
+					body.velocity = dir_to_dest * 25.0
 					print("[PortalDoor] Applied velocity boost toward %s" % dest_room.name)
 				
-				# 5. SET COOLDOWN: Prevent immediate re-triggering
+				# 4. SET COOLDOWN: Prevent immediate re-triggering on BOTH portals
 				_player_cooldowns[body] = PORTAL_COOLDOWN
-				print("[PortalDoor] Portal cooldown started for %.1f seconds" % PORTAL_COOLDOWN)
-			
-			# Reset sync state
-			_is_w_synced = false
+				if target_portal:
+					target_portal._player_cooldowns[body] = PORTAL_COOLDOWN
+				print("[PortalDoor] Portal cooldown started on both portals for %.1f seconds" % PORTAL_COOLDOWN)
 		else:
-			# Player backed out - restore destination room's original W
-			if _is_w_synced and target_portal and is_instance_valid(target_portal):
-				var dest_room = target_portal.source_room
-				if dest_room and dest_room.get("position_4d") != null:
-					var old_pos: Vector4 = dest_room.position_4d
-					dest_room.position_4d = Vector4(old_pos.x, old_pos.y, old_pos.z, _target_original_w)
-					
-					# Update slice
-					var slicer = get_tree().get_first_node_in_group("slicer_4d")
-					if dest_room.has_method("update_slice") and slicer:
-						dest_room.update_slice(slicer.slice_w)
-					if slicer and slicer.has_method("update_all_objects"):
-						slicer.update_all_objects()
-					
-					print("[PortalDoor] Restored %s W to %.1f (backed out)" % [dest_room.name, _target_original_w])
-				_is_w_synced = false
-			
+			# Player backed out - no W-restore needed (LevelGenerator handles visibility)
 			print("[PortalDoor] Player backed out of portal: %s" % name)
 		
 		player_transitioned.emit(source_w, target_w)

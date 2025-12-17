@@ -61,6 +61,9 @@ signal player_spawned(spawn_room: Node)
 ## Currently lit room ID (-1 = none)
 var current_lit_room_id: int = -1
 
+## Original W values for each room (for restoration when not adjacent to host)
+var _original_room_w: Dictionary = {}  # room_id -> original W value
+
 func _ready() -> void:
 	add_to_group("level_generator")
 
@@ -79,6 +82,7 @@ func _process(_delta: float) -> void:
 	# Only update lights if player changed rooms
 	if player_room_id != current_lit_room_id:
 		_update_room_lights(player_room_id)
+		_update_room_w_sync(player_room_id)  # Sync W for host + adjacent rooms
 		current_lit_room_id = player_room_id
 
 ## Get the room ID the player is currently in
@@ -114,6 +118,61 @@ func _update_room_lights(player_room_id: int) -> void:
 		var should_enable: bool = (i == player_room_id) or (i in adjacent_ids)
 		if room.has_method("set_light_enabled"):
 			room.set_light_enabled(should_enable)
+
+## Update room W coordinates: sync host room + adjacent rooms to player's W
+## This makes portals see-through regardless of distance (graph-based visibility)
+func _update_room_w_sync(player_room_id: int) -> void:
+	if player_room_id < 0:
+		return
+	
+	# Get current slicer W (player's current slice)
+	var slicer = get_tree().get_first_node_in_group("slicer_4d")
+	var current_w: float = 0.0
+	if slicer and slicer.get("slice_w") != null:
+		current_w = slicer.slice_w
+	
+	# Get adjacent room IDs from graph
+	var adjacent_ids: Array = []
+	if room_graph.has(player_room_id):
+		adjacent_ids = room_graph[player_room_id]["connections"]
+	
+	# Rooms that should be synced to current W (host + adjacent)
+	var synced_ids: Array = [player_room_id] + adjacent_ids
+	
+	print("[LevelGen] W-SYNC: Host room %d, syncing %d rooms to W=%.1f" % [player_room_id, synced_ids.size(), current_w])
+	
+	# Update all room W coordinates
+	for i in range(rooms.size()):
+		var room = rooms[i]
+		if not is_instance_valid(room):
+			continue
+		
+		if i in synced_ids:
+			# Sync to player's current W (make visible)
+			if room.get("position_4d") != null:
+				var old_w: float = room.position_4d.w
+				room.position_4d = Vector4(room.position_4d.x, room.position_4d.y, room.position_4d.z, current_w)
+				if room.get("_position_4d") != null:
+					room._position_4d.w = current_w
+				if room.has_method("update_slice"):
+					room.update_slice(current_w)
+				if old_w != current_w:
+					print("[LevelGen] Room %d synced W: %.1f -> %.1f" % [i, old_w, current_w])
+		else:
+			# Restore to original W (make invisible through portals)
+			if _original_room_w.has(i) and room.get("position_4d") != null:
+				var original_w: float = _original_room_w[i]
+				var current_room_w: float = room.position_4d.w
+				if current_room_w != original_w:
+					room.position_4d = Vector4(room.position_4d.x, room.position_4d.y, room.position_4d.z, original_w)
+					if room.get("_position_4d") != null:
+						room._position_4d.w = original_w
+					if room.has_method("update_slice"):
+						room.update_slice(current_w)  # Use current slice W for visibility calc
+	
+	# Update slicer to refresh all objects
+	if slicer and slicer.has_method("update_all_objects"):
+		slicer.update_all_objects()
 
 ## Disable the global directional light
 func _disable_global_light() -> void:
@@ -159,10 +218,12 @@ func generate_level(custom_seed: int = 0) -> void:
 	await get_tree().process_frame
 	_notify_surface_walkers()
 	
-	# Enable light in start room
+	# Enable light in start room and sync W for adjacent rooms
 	if rooms.size() > 0 and rooms[0].has_method("set_light_enabled"):
 		rooms[0].set_light_enabled(true)
 		current_lit_room_id = 0
+		# CRITICAL: Sync W for start room + adjacent rooms so portals are see-through from spawn
+		_update_room_w_sync(0)
 	
 	level_generated.emit(rooms)
 	
@@ -175,6 +236,8 @@ func _clear_level() -> void:
 			room.queue_free()
 	rooms.clear()
 	room_graph.clear()
+	_original_room_w.clear()
+	current_lit_room_id = -1
 
 ## Generate a BRANCHING room graph (maze-like structure)
 func _generate_branching_graph() -> void:
@@ -283,6 +346,15 @@ func _assign_room_types() -> void:
 		room_graph[available.pop_front()]["type"] = ROOM_GAMBLING
 	if available.size() > 0:
 		room_graph[available.pop_front()]["type"] = ROOM_SPECIAL
+	
+	# Pre-calculate size multipliers for each room (including random enlargement)
+	# This MUST happen before positioning so touch distances are correct
+	for room_id in room_graph:
+		var room_type: int = room_graph[room_id]["type"]
+		var size_mult: float = ROOM_SIZES.get(room_type, 1.0)
+		if room_type == ROOM_NORMAL and randf() < 0.3:
+			size_mult = 1.5  # Some normal rooms are larger
+		room_graph[room_id]["size_mult"] = size_mult
 
 ## Spawn room spheres with W-axis positioning
 ## Rooms touch at portal points, each at different W coordinate
@@ -308,8 +380,9 @@ func _spawn_rooms_grid() -> void:
 			
 			# Position target room so it touches current room at portal
 			var current_pos: Vector4D = room_positions[current_id]
-			var current_radius: float = base_room_radius * ROOM_SIZES.get(room_graph[current_id]["type"], 1.0)
-			var target_radius: float = base_room_radius * ROOM_SIZES.get(room_graph[target_id]["type"], 1.0)
+			# Use pre-calculated size multipliers (includes random enlargement)
+			var current_radius: float = base_room_radius * room_graph[current_id].get("size_mult", 1.0)
+			var target_radius: float = base_room_radius * room_graph[target_id].get("size_mult", 1.0)
 			
 			# Distance between centers so spheres just touch
 			var touch_distance: float = current_radius + target_radius
@@ -383,10 +456,8 @@ func _create_room(room_id: int, room_type: int, pos_4d: Vector4D) -> Node:
 	room.room_type = room_type
 	room.radius = base_room_radius
 	
-	# Set size multiplier
-	var size_mult: float = ROOM_SIZES.get(room_type, 1.0)
-	if room_type == ROOM_NORMAL and randf() < 0.3:
-		size_mult = 1.5  # Some normal rooms are larger
+	# Use pre-calculated size multiplier from graph (already includes random enlargement)
+	var size_mult: float = room_graph[room_id].get("size_mult", ROOM_SIZES.get(room_type, 1.0))
 	room.size_multiplier = size_mult
 	
 	# Set color
@@ -401,6 +472,9 @@ func _create_room(room_id: int, room_type: int, pos_4d: Vector4D) -> Node:
 	
 	# Slice threshold based on room radius
 	room.slice_threshold = room.radius * size_mult
+	
+	# Store original W for host-room sync system
+	_original_room_w[room_id] = pos_4d.w
 	
 	# DEBUG: Log room creation
 	print("[LevelGen] Created %s: 3D pos=%s, W=%.1f, radius=%.1f" % [room.name, pos_4d.to_vector3(), pos_4d.w, room.radius * size_mult])

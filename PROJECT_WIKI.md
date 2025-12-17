@@ -38,11 +38,19 @@
 
 ## 🤖 For AI Agents: Active Debug Task
 
-> **Status: 2025-12-15** - Portal system mostly working!
+> **Status: 2025-12-17** - Portal traversal working, 2 issues remaining
 >
-> **See**: `C:\Users\Jacob\.gemini\antigravity\brain\a218d562-b55e-41ea-b479-47fede6bb181\implementation_plan.md`
+> **Fixed this session**:
 >
-> **Summary**: Portal see-through ✅, traversal ✅, cooldown ✅. Remaining issue: transition triggers on far side of portal instead of center.
+> - W-sync on level load
+> - Room positioning overlap
+> - Portal collision/physics blocking
+> - Dual-portal cooldown
+>
+> **Outstanding issues**:
+>
+> 1. Visibility blocked on initial spawn (works after first portal)
+> 2. Out of bounds after multiple portal traversals
 
 ---
 
@@ -69,26 +77,26 @@
 | **Dynamic Sphere Gravity** | Walk like an ant on interior sphere surfaces with smooth rotation |
 | **Slide Mechanic** | Hold Ctrl while moving to slide with momentum preservation |
 | **Bunny Hop (B-Hop)** | Jump on landing for uncapped speed boosts |
-| **Portal W-Sync** | Destination room visibility syncs when approaching portal |
+| **Portal W-Sync** | Host room + adjacent rooms synced to player's W coordinate |
 | **Portal See-Through** | Shader-based holes in sphere mesh show destination room interior |
 | **Portal Traversal** | Walk through portals with velocity boost and W-shift |
-| **Portal Cooldown** | 2s cooldown prevents infinite bouncing between rooms |
+| **Portal Cooldown** | 2s cooldown on both source and target portals |
 
 ### ⚠️ Known Issues
 
 | Issue | Description |
 |-------|-------------|
-| Portal transition timing | Transition triggers on far edge of portal, not center |
+| Spawn Visibility | Adjacent rooms invisible until first portal traversal |
+| Out of Bounds | Player can end up outside rooms after multiple portal traversals |
 
 ### 📋 Future Objectives
 
-- [ ] Fix portal transition to trigger at center
+- [ ] Fix spawn visibility issue
+- [ ] Fix out-of-bounds after portals
 - [ ] Secret rooms at different W values in 4D
 - [ ] More enemy types
 - [ ] Boss encounters
 - [ ] Roguelike progression system
-- [ ] Gambling room mechanics
-- [ ] Special room content
 
 ---
 
@@ -355,42 +363,44 @@ initial_w = 0.0
 | 2025-12-08 | 0.6.0 | **Slide & B-Hop mechanics** - crouch-slide, bunny hop with uncapped momentum |
 | 2025-12-11 | 0.6.1 | **W-Axis Portal System (WIP)** - Rooms at different W coordinates, portals teleport between rooms |
 | 2025-12-14 | 0.6.2 | **W-Sync Portal Visibility** - Portal see-through via W-coordinate synchronization |
+| 2025-12-17 | 0.6.3 | **Portal Crossing Fix** - Side-based detection (INSIDE/OUTSIDE) eliminates oscillation bugs |
 
 ---
 
 ## W-Axis Portal System
 
-### Implementation (2025-12-15)
+### Implementation (2025-12-17)
 
-**Approach**: W-coordinate synchronization + physics-based hole detection.
+**Approach**: Host room + adjacent rooms graph-based W-sync + side-based crossing detection.
 
 **What's Working**:
 
 - ✅ Rooms positioned with unique W values (W = room_id × 30)
 - ✅ Portal see-through via shader holes in sphere mesh
-- ✅ **W-sync on portal approach** - destination room becomes visible
+- ✅ **Host Room W-Sync** - current room + all connected rooms synced to player's W
+- ✅ **Graph-based visibility** - portals always see-through regardless of distance
 - ✅ **Physics-based hole** - player falls through portal (can't stand on it)
-- ✅ **Portal traversal** - player enters zone, exits other side, W-shifts
+- ✅ **Portal traversal** - side-based crossing detection (INSIDE vs OUTSIDE)
 - ✅ **Velocity boost** - player propelled toward destination room on traversal
 - ✅ **Cooldown system** - 2s cooldown prevents bouncing between rooms
 
 **How It Works**:
 
-1. Player approaches portal → `_is_in_portal_hole()` returns true (within 2.5× radius)
-2. Clamping disabled → player falls through sphere surface
-3. Player enters transition_area (Area3D) → destination room W syncs
-4. Player exits opposite side → W-shift to target room, velocity boost applied
-5. 2s cooldown prevents immediate re-trigger
-
-**Known Issue**: Transition triggers at far edge of portal instead of center.
+1. LevelGenerator tracks player's current room (host room)
+2. On room change → sync host + all adjacent room W coordinates to player's W
+3. Non-adjacent rooms restored to original W (invisible through portals)
+4. Player enters portal zone → entry SIDE recorded (INSIDE/OUTSIDE)
+5. Player exits zone → compare exit SIDE to entry SIDE
+6. If sides differ → player crossed through → W-shift + velocity boost
+7. If sides match → player backed out → no action needed
 
 **Key Files**:
 
-- `portal_door.gd`: W-sync, cooldown, velocity boost, transition detection
+- `level_generator.gd`: `_update_room_w_sync()` - centralized W management via `_original_room_w`
+- `portal_door.gd`: Side-based crossing detection, velocity boost, cooldown
 - `player_controller.gd`: `_is_in_portal_hole()` with distance-based check
 - `room_sphere4d.gd`: Shader portal holes
-- `room_sphere_portals.gdshader`: Visual holes at portal positions
 
 ---
 
-*Last updated: 2025-12-15*
+*Last updated: 2025-12-17*
