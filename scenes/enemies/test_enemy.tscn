@@ -1,0 +1,36 @@
+[gd_scene load_steps=4 format=3 uid="uid://testenemy001"]
+
+[ext_resource type="Script" path="res://scripts/enemies/test_enemy.gd" id="1_enemy"]
+
+[sub_resource type="CapsuleShape3D" id="CapsuleShape3D_body"]
+radius = 0.4
+height = 1.5
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_body"]
+albedo_color = Color(0.8, 0.2, 0.2, 1)
+
+[node name="TestEnemy" type="CharacterBody3D" groups=["enemies"]]
+script = ExtResource("1_enemy")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.75, 0)
+shape = SubResource("CapsuleShape3D_body")
+
+[node name="Body" type="CSGCylinder3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.75, 0)
+radius = 0.4
+height = 1.5
+material = SubResource("StandardMaterial3D_body")
+
+[node name="Head" type="CSGSphere3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.6, 0)
+radius = 0.3
+material = SubResource("StandardMaterial3D_body")
+
+[node name="EyeLeft" type="CSGSphere3D" parent="Head"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.12, 0.05, -0.2)
+radius = 0.08
+
+[node name="EyeRight" type="CSGSphere3D" parent="Head"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.12, 0.05, -0.2)
+radius = 0.08

@@ -1,0 +1,65 @@
+[gd_scene load_steps=6 format=3 uid="uid://test4d_full"]
+
+[ext_resource type="Script" path="res://scripts/geometry4d/hypersphere4d.gd" id="1_hypersphere"]
+[ext_resource type="Script" path="res://scripts/geometry4d/klein_bottle4d.gd" id="2_klein"]
+[ext_resource type="Script" path="res://scripts/rendering4d/slicer4d.gd" id="3_slicer"]
+[ext_resource type="PackedScene" path="res://scenes/player/player.tscn" id="4_player"]
+
+[sub_resource type="Environment" id="Environment_1"]
+background_mode = 1
+background_color = Color(0.02, 0.02, 0.05, 1)
+ambient_light_source = 2
+ambient_light_color = Color(0.15, 0.15, 0.25, 1)
+glow_enabled = true
+glow_intensity = 1.5
+glow_blend_mode = 0
+
+[node name="TestLevel4D" type="Node3D"]
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_1")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.866, -0.25, 0.433, 0, 0.866, 0.5, -0.5, -0.433, 0.75, 0, 30, 0)
+light_color = Color(0.8, 0.85, 1, 1)
+light_energy = 1.2
+shadow_enabled = true
+
+[node name="Slicer4D" type="Node" parent="."]
+script = ExtResource("3_slicer")
+slice_w = 0.0
+scroll_speed = 2.0
+
+[node name="Hypersphere" type="Node3D" parent="."]
+script = ExtResource("1_hypersphere")
+position_4d = Vector4(0, 0, 0, 0)
+scale_4d = Vector4(1, 1, 1, 1)
+slice_threshold = 20.0
+radius = 15.0
+glow_color = Color(0.2, 0.6, 1.0, 1.0)
+
+[node name="KleinBottle" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 40, 0, 0)
+script = ExtResource("2_klein")
+position_4d = Vector4(40, 0, 0, 0)
+scale_4d = Vector4(1, 1, 1, 1)
+slice_threshold = 10.0
+major_radius = 6.0
+tube_radius = 2.5
+glow_color = Color(1.0, 0.3, 0.6, 1.0)
+resolution = 48
+
+[node name="Player" parent="." instance=ExtResource("4_player")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 16, 0)
+enable_4d_mode = true
+initial_w = 0.0
+
+[node name="InfoLabel" type="Label3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 25, 0)
+text = "4D World Test Level
+Press ` for console, type '4d' for scroll wheel W-movement
+
+Blue Sphere = Hypersphere (4D sphere)
+Pink Shape = Klein Bottle (non-orientable 4D surface)"
+font_size = 28
+outline_size = 4

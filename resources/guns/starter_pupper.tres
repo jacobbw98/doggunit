@@ -1,0 +1,20 @@
+[gd_resource type="Resource" script_class="GunStats" load_steps=2 format=3 uid="uid://testgun001"]
+
+[ext_resource type="Script" path="res://scripts/weapons/gun_stats.gd" id="1_stats"]
+
+[resource]
+script = ExtResource("1_stats")
+gun_name = "Starter Pupper"
+gun_type = 0
+rarity = 2
+base_damage = 15.0
+projectile_size = 1.0
+knockback_force = 3.0
+projectile_speed = 25.0
+projectile_count = 1
+crit_damage_multiplier = 2.0
+accuracy = 0.85
+precision = 0.8
+crit_chance = 0.1
+max_ammo = 20
+fire_rate = 0.3
