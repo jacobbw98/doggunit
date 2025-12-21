@@ -15,6 +15,9 @@ const W_SPACING: float = 30.0
 ## Random seed (0 = random)
 @export var seed_value: int = 0
 
+## Auto-generate level on scene load
+@export var auto_generate: bool = false
+
 ## Generated rooms
 var rooms: Array = []
 
@@ -66,6 +69,18 @@ var _original_room_w: Dictionary = {}  # room_id -> original W value
 
 func _ready() -> void:
 	add_to_group("level_generator")
+	
+	# Auto-generate level if enabled
+	if auto_generate:
+		call_deferred("_auto_generate_level")
+
+## Called when auto_generate is enabled - generates level and spawns player
+func _auto_generate_level() -> void:
+	print("[LevelGenerator] Auto-generating level...")
+	generate_level(seed_value)
+	await get_tree().process_frame
+	spawn_player_in_start_room()
+	print("[LevelGenerator] Auto-generation complete!")
 
 func _process(_delta: float) -> void:
 	# Track player and update room lighting based on proximity
@@ -218,12 +233,15 @@ func generate_level(custom_seed: int = 0) -> void:
 	await get_tree().process_frame
 	_notify_surface_walkers()
 	
+	# Wait another frame to ensure all room _ready() and call_deferred have completed
+	# This is critical for portal visibility at spawn
+	await get_tree().process_frame
+	
 	# Enable light in start room and sync W for adjacent rooms
 	if rooms.size() > 0 and rooms[0].has_method("set_light_enabled"):
 		rooms[0].set_light_enabled(true)
-		current_lit_room_id = 0
-		# CRITICAL: Sync W for start room + adjacent rooms so portals are see-through from spawn
-		_update_room_w_sync(0)
+		# DON'T set current_lit_room_id yet - let _process do it so it triggers a fresh sync
+		# after the player is spawned and positioned
 	
 	level_generated.emit(rooms)
 	
@@ -356,6 +374,26 @@ func _assign_room_types() -> void:
 			size_mult = 1.5  # Some normal rooms are larger
 		room_graph[room_id]["size_mult"] = size_mult
 
+## Check if a proposed room position overlaps with any already-placed rooms
+## Returns true if there is NO overlap (position is valid)
+func _is_position_valid(proposed_pos: Vector3, proposed_radius: float, room_positions: Dictionary, exclude_room_id: int = -1) -> bool:
+	for room_id in room_positions:
+		if room_id == exclude_room_id:
+			continue
+		var existing_pos: Vector4D = room_positions[room_id]
+		var existing_radius: float = base_room_radius * room_graph[room_id].get("size_mult", 1.0)
+		
+		# Calculate distance between room centers
+		var dist: float = proposed_pos.distance_to(existing_pos.to_vector3())
+		
+		# Minimum allowed distance: sum of radii (touching is OK, overlapping is not)
+		# Use a small buffer (0.5) to prevent tangent issues
+		var min_dist: float = proposed_radius + existing_radius - 0.5
+		
+		if dist < min_dist:
+			return false  # Overlap detected
+	return true
+
 ## Spawn room spheres with W-axis positioning
 ## Rooms touch at portal points, each at different W coordinate
 func _spawn_rooms_grid() -> void:
@@ -387,15 +425,32 @@ func _spawn_rooms_grid() -> void:
 			# Distance between centers so spheres just touch
 			var touch_distance: float = current_radius + target_radius
 			
-			# Random direction for portal placement (on sphere surface)
-			var portal_dir: Vector3 = Vector3(
-				randf_range(-1, 1),
-				randf_range(-0.5, 0.5),  # Prefer more horizontal
-				randf_range(-1, 1)
-			).normalized()
+			# Try multiple directions to find a non-overlapping position
+			var max_attempts: int = 20
+			var portal_dir: Vector3 = Vector3.ZERO
+			var target_xyz: Vector3 = Vector3.ZERO
+			var found_valid_position: bool = false
 			
-			# Position target room center at touch distance from current room
-			var target_xyz: Vector3 = current_pos.to_vector3() + portal_dir * touch_distance
+			for attempt in range(max_attempts):
+				# Random direction for portal placement (on sphere surface)
+				portal_dir = Vector3(
+					randf_range(-1, 1),
+					randf_range(-0.5, 0.5),  # Prefer more horizontal
+					randf_range(-1, 1)
+				).normalized()
+				
+				# Position target room center at touch distance from current room
+				target_xyz = current_pos.to_vector3() + portal_dir * touch_distance
+				
+				# Check for overlaps with all already-placed rooms (except current)
+				if _is_position_valid(target_xyz, target_radius, room_positions, current_id):
+					found_valid_position = true
+					break
+				elif attempt == max_attempts - 1:
+					# Last attempt: push the room further out to avoid overlap
+					var push_distance: float = touch_distance * 1.5
+					target_xyz = current_pos.to_vector3() + portal_dir * push_distance
+					print("[LevelGen] Room %d pushed further to avoid overlap" % target_id)
 			
 			# Each room gets unique W coordinate for 4D slice separation
 			var target_w: float = target_id * W_SPACING

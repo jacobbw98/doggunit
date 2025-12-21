@@ -174,9 +174,9 @@ func _create_transition_area() -> void:
 	transition_area.monitoring = true
 	transition_area.monitorable = false
 	
-	# Set collision layer/mask to detect player (layer 1 is default for CharacterBody3D)
+	# Set collision layer/mask to detect player and projectiles
 	transition_area.collision_layer = 0  # Don't participate as collidable
-	transition_area.collision_mask = 1   # Detect layer 1 (player)
+	transition_area.collision_mask = 1 | 2  # Detect layer 1 (player) and layer 2 (projectiles)
 	
 	# Transition zone - box extending INTO the sphere (where player walks)
 	var col_shape := CollisionShape3D.new()
@@ -196,6 +196,7 @@ func _create_transition_area() -> void:
 	# Connect transition triggers
 	transition_area.body_entered.connect(_on_transition_body_entered)
 	transition_area.body_exited.connect(_on_transition_body_exited)
+	transition_area.area_entered.connect(_on_transition_area_entered)
 
 func _create_label() -> void:
 	label = Label3D.new()
@@ -242,102 +243,109 @@ func _on_transition_body_entered(body: Node3D) -> void:
 				# Player is on cooldown, don't trigger
 				return
 	
-	if body not in _players_in_zone:
-		_players_in_zone.append(body)
+	# Check entry side - only teleport if entering from INSIDE the room (walking toward portal)
+	# Portal local Z after positioning: +Z points toward sphere center (inside room)
+	# -Z points toward destination (outside room / through portal)
+	var rel_pos: Vector3 = body.global_position - global_position
+	var local_z_pos: float = rel_pos.dot(global_transform.basis.z)
+	var entered_from_inside: bool = local_z_pos > 0.0
+	
+	print("[PortalDoor] Player entered portal zone: %s (entry_side=%s, local_z=%.2f)" % [name, "INSIDE" if local_z_pos > 0 else "OUTSIDE", local_z_pos])
+	
+	# INSTANT TRANSITION: If entering from inside the room, teleport immediately
+	if entered_from_inside and target_portal and is_instance_valid(target_portal):
+		var dest_room = target_portal.source_room
+		print("[PortalDoor] INSTANT TRANSITION through %s to %s" % [name, dest_room.name if dest_room else "unknown"])
 		
-		# NOTE: W-sync is now handled centrally by LevelGenerator (host room + adjacent rooms)
-		# The portal no longer needs to sync destination room W on proximity
-		
-		# Record entry SIDE for crossing detection
-		# Portal local Z after positioning: +Z points toward sphere center (inside room)
-		# -Z points toward destination (outside room / through portal)
-		var rel_pos: Vector3 = body.global_position - global_position
-		var local_z_pos: float = rel_pos.dot(global_transform.basis.z)  # Positive = front/inside, Negative = behind/outside
-		_player_entry_side[body] = local_z_pos > 0.0  # true = entered from inside room (front)
-		
-		print("[PortalDoor] Player entered portal zone: %s (entry_side=%s, local_z=%.2f)" % [name, "INSIDE" if local_z_pos > 0 else "OUTSIDE", local_z_pos])
+		_perform_portal_transition(body, dest_room)
+	else:
+		# Entering from outside (shouldn't happen normally) - just track for safety
+		if body not in _players_in_zone:
+			_players_in_zone.append(body)
+			_player_entry_side[body] = entered_from_inside
 
 func _on_transition_body_exited(body: Node3D) -> void:
 	if not body.is_in_group("player"):
 		return
 	
+	# Clean up tracking (transitions now happen on entry, not exit)
 	if body in _players_in_zone:
 		_players_in_zone.erase(body)
-		
-		# Get entry SIDE (which side of portal surface player entered from)
-		var entered_from_inside: bool = _player_entry_side.get(body, true)
+	if body in _player_entry_side:
 		_player_entry_side.erase(body)
-		
-		# Get exit SIDE (which side player is on now)
-		var rel_pos: Vector3 = body.global_position - global_position
-		var local_z_pos: float = rel_pos.dot(global_transform.basis.z)  # Positive = front/inside, Negative = behind/outside
-		var exited_to_inside: bool = local_z_pos > 0.0
-		
-		# Player CROSSED THROUGH if entry side != exit side
-		# e.g., entered from inside room (front) but exited toward destination (behind)
-		var passed_through: bool = entered_from_inside != exited_to_inside
-		
-		print("[PortalDoor] Player exited zone: %s (entry=%s, exit=%s, local_z=%.2f, crossed=%s)" % [
-			name, 
-			"INSIDE" if entered_from_inside else "OUTSIDE",
-			"INSIDE" if exited_to_inside else "OUTSIDE",
-			local_z_pos,
-			passed_through
-		])
-		
-		if passed_through and target_portal and is_instance_valid(target_portal):
-			# Player walked INTO destination room!
-			var dest_room = target_portal.source_room
-			print("[PortalDoor] Player walked through portal to %s" % (dest_room.name if dest_room else "unknown"))
-			
-			if dest_room and dest_room.get("position_4d") != null:
-				# 1. Update lighting immediately (fix dark room delay)
-				if dest_room.has_method("set_light_enabled"):
-					dest_room.set_light_enabled(true)
-				
-				# NOTE: W-sync is now handled by LevelGenerator when player changes rooms
-				# The portal only needs to shift the player's W coordinate
-				
-				# 2. Shift PLAYER to the destination room's original W coordinate
-				# Get original W from LevelGenerator's stored values
-				var dest_original_w: float = 0.0
-				var level_gen = get_tree().get_first_node_in_group("level_generator")
-				if level_gen and level_gen.get("_original_room_w") != null:
-					var dest_room_id: int = dest_room.room_id if dest_room.get("room_id") != null else -1
-					if level_gen._original_room_w.has(dest_room_id):
-						dest_original_w = level_gen._original_room_w[dest_room_id]
-						print("[PortalDoor] Got original W=%.1f for room %d from LevelGenerator" % [dest_original_w, dest_room_id])
-				
-				if body.get("position_4d") != null:
-					body.position_4d.w = dest_original_w
-					print("[PortalDoor] Shifted Player W to %.1f" % dest_original_w)
+	
+	print("[PortalDoor] Player exited zone: %s" % name)
 
-				# Force slicer update to new W
-				var slicer = get_tree().get_first_node_in_group("slicer_4d")
-				if slicer:
-					slicer.slice_w = dest_original_w
-					if slicer.has_method("update_all_objects"):
-						slicer.update_all_objects()
-				
-				# 3. VELOCITY BOOST: Propel player toward destination room's center
-				var dest_center: Vector3 = dest_room.global_position
-				var player_pos: Vector3 = body.global_position
-				var dir_to_dest: Vector3 = (dest_center - player_pos).normalized()
-				
-				if body.get("velocity") != null:
-					body.velocity = dir_to_dest * 25.0
-					print("[PortalDoor] Applied velocity boost toward %s" % dest_room.name)
-				
-				# 4. SET COOLDOWN: Prevent immediate re-triggering on BOTH portals
-				_player_cooldowns[body] = PORTAL_COOLDOWN
-				if target_portal:
-					target_portal._player_cooldowns[body] = PORTAL_COOLDOWN
-				print("[PortalDoor] Portal cooldown started on both portals for %.1f seconds" % PORTAL_COOLDOWN)
-		else:
-			# Player backed out - no W-restore needed (LevelGenerator handles visibility)
-			print("[PortalDoor] Player backed out of portal: %s" % name)
-		
-		player_transitioned.emit(source_w, target_w)
+## Handle projectiles entering the transition area
+func _on_transition_area_entered(area: Area3D) -> void:
+	# Only handle projectiles
+	if not area.is_in_group("projectiles"):
+		return
+	
+	# Spawn protection - don't trigger during first second after level load
+	if not _is_ready_for_transitions:
+		return
+	
+	# Skip if no valid target portal
+	if not target_portal or not is_instance_valid(target_portal):
+		return
+	
+	# Teleport projectile's W-coordinate to destination
+	if area.get("position_4d") != null:
+		area.position_4d.w = target_w
+		print("[PortalDoor] Projectile W-transitioned to %.1f" % target_w)
+
+## Perform the actual portal transition - teleport player to destination room
+func _perform_portal_transition(body: Node3D, dest_room: Node) -> void:
+	if not dest_room or dest_room.get("position_4d") == null:
+		return
+	
+	# 1. Update lighting immediately (fix dark room delay)
+	if dest_room.has_method("set_light_enabled"):
+		dest_room.set_light_enabled(true)
+	
+	# 2. Shift PLAYER to the destination room's original W coordinate
+	var dest_original_w: float = 0.0
+	var level_gen = get_tree().get_first_node_in_group("level_generator")
+	var dest_room_id: int = dest_room.room_id if dest_room.get("room_id") != null else -1
+	if level_gen and level_gen.get("_original_room_w") != null:
+		if level_gen._original_room_w.has(dest_room_id):
+			dest_original_w = level_gen._original_room_w[dest_room_id]
+			print("[PortalDoor] Got original W=%.1f for room %d from LevelGenerator" % [dest_original_w, dest_room_id])
+	
+	if body.get("position_4d") != null:
+		body.position_4d.w = dest_original_w
+		print("[PortalDoor] Shifted Player W to %.1f" % dest_original_w)
+
+	# Force slicer update to new W
+	var slicer = get_tree().get_first_node_in_group("slicer_4d")
+	if slicer:
+		slicer.slice_w = dest_original_w
+		if slicer.has_method("update_all_objects"):
+			slicer.update_all_objects()
+	
+	# CRITICAL: Immediately sync room W coordinates so player doesn't end up in space
+	if level_gen and level_gen.has_method("_update_room_w_sync") and dest_room_id >= 0:
+		level_gen._update_room_w_sync(dest_room_id)
+		level_gen.current_lit_room_id = dest_room_id
+		print("[PortalDoor] Immediately synced rooms for destination %d" % dest_room_id)
+	
+	# 3. VELOCITY BOOST: Propel player toward destination room's center
+	var dest_center: Vector3 = dest_room.global_position
+	var player_pos: Vector3 = body.global_position
+	var dir_to_dest: Vector3 = (dest_center - player_pos).normalized()
+	
+	if body.get("velocity") != null:
+		body.velocity = dir_to_dest * 40.0  # Moderate speed boost
+		print("[PortalDoor] Applied velocity boost toward %s" % dest_room.name)
+	
+	# 4. SET COOLDOWN: Prevent immediate re-triggering on BOTH portals
+	_player_cooldowns[body] = PORTAL_COOLDOWN
+	if target_portal:
+		target_portal._player_cooldowns[body] = PORTAL_COOLDOWN
+	print("[PortalDoor] Portal cooldown started on both portals for %.1f seconds" % PORTAL_COOLDOWN)
+	
+	player_transitioned.emit(source_w, target_w)
 
 ## Set the door color based on target room type
 func set_color_from_room_type(room_type: int) -> void:

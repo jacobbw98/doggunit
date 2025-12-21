@@ -40,6 +40,7 @@ var _player: Node = null
 func _ready() -> void:
 	_create_visual()
 	_setup_collision()
+	add_to_group("projectiles")
 	
 	# Connect collision signal
 	body_entered.connect(_on_body_entered)
@@ -126,6 +127,9 @@ func _setup_collision() -> void:
 	# Set collision layers
 	collision_layer = 2  # Projectiles layer
 	collision_mask = 1 | 4  # Collide with default and enemies
+	
+	# Enable monitorable so portals can detect us
+	monitorable = true
 
 func _physics_process(delta: float) -> void:
 	# Move forward in 3D

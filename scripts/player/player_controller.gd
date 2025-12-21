@@ -474,7 +474,8 @@ func _fire_weapon() -> void:
 		# Spawn bullets from the gun position (weapon manager), not camera
 		var origin = weapon_manager.global_position + direction * 0.5  # Slightly in front of gun
 		# Pass player's W-position for 4D-aware projectiles
-		var w_pos: float = position_4d.w if enable_4d_mode else 0.0
+		# Always use position_4d.w (updated by portal transitions regardless of enable_4d_mode)
+		var w_pos: float = position_4d.w
 		weapon_manager.fire(origin, direction, w_pos)
 
 func take_damage(amount: int, damage_type: GunTypes.Type = GunTypes.Type.EXPLOSIVE) -> void:
@@ -568,6 +569,7 @@ func _is_in_portal_hole(pos: Vector3, room: Node) -> bool:
 			continue
 		
 		# Method 1: Check if player is in the transition zone (Area3D detection)
+		# This is the most reliable - if Area3D says we're in, we're in
 		if portal.get("_players_in_zone") != null:
 			var players_in_zone: Array = portal._players_in_zone
 			if self in players_in_zone:
@@ -575,15 +577,16 @@ func _is_in_portal_hole(pos: Vector3, room: Node) -> bool:
 		
 		# Method 2: Check if player is NEAR the portal's position (within hole radius)
 		# This catches cases where player is standing ON the portal before entering the box
-		# Use XYZ distance - the portal position is on the sphere surface
+		# Use a tighter radius (2.0x) to prevent premature floor clipping
+		# The transition Area3D is portal_radius * 2.5 wide, so 2.0x is safe
 		var portal_radius = portal.get("portal_radius")
 		if portal_radius == null:
 			portal_radius = 2.0  # Default portal radius
 		
 		var dist_to_portal: float = pos.distance_to(portal.global_position)
-		# Use a generous margin (4x radius) to ensure player can walk through
-		# This is needed because we're testing distance to portal CENTER, not edge
-		if dist_to_portal < portal_radius * 4.0:
+		# Use 2.0x portal radius - tight enough to prevent floor clipping,
+		# but large enough to allow walking into the hole
+		if dist_to_portal < portal_radius * 2.0:
 			return true
 			
 	return false

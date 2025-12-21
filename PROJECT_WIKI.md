@@ -38,19 +38,22 @@
 
 ## 🤖 For AI Agents: Active Debug Task
 
-> **Status: 2025-12-17** - Portal traversal working, 2 issues remaining
+> **Status: 2025-12-20** - Portal system robust, transitioning to gameplay polish
 >
 > **Fixed this session**:
 >
-> - W-sync on level load
-> - Room positioning overlap
-> - Portal collision/physics blocking
-> - Dual-portal cooldown
+> - **Room Clipping**: Collisions-aware placement prevents rooms overlapping.
+> - **Spawn Visibility**: W-sync timing fixed (removed premature call).
+> - **Portal Oscillation**: Cooldown check added to transition exit; overlapping zones are now safe.
+> - **Falling Through Floors**: Tightened `_is_in_portal_hole` radius (4.0x -> 1.2x/2.0x) to prevent premature noclip.
+> - **Auto-Level Gen**: Scene `procedural_level.tscn` now spawns a level automatically on load.
+> - **Instant Transitions**: Removed "jelly" delay - you teleport immediately on portal zone contact.
+> - **Immediate W-Sync**: Direct W-sync call after traversal prevents "trapped in space" due to W-mismatch.
+> - **Projectile Portal Support**: Projectiles now transition their W-coordinate when passing through portals.
 >
 > **Outstanding issues**:
 >
-> 1. Visibility blocked on initial spawn (works after first portal)
-> 2. Out of bounds after multiple portal traversals
+> 1. Level generation can sometimes place portals/rooms in a way that feels "far apart" or repetitive.
 
 ---
 
@@ -66,33 +69,26 @@
 | Slice Rendering | `Slicer4D` with smooth scrolling and dynamic limits |
 | Gun System | 4 types × 6 rarities with rock-paper-scissors effectiveness |
 | Debug Console | Commands: spawn, gun, 4d, god, heal, noclip, kill, ammo, level, ghost |
-| Player Controller | 3D/4D dual-mode with surface walking |
+| Player Controller | 3D/4D dual-mode with surface walking, **fixed falling through floors** |
 | Test Enemy | Spin-until-see, approach, and shoot AI |
 | Enemy4D | 4D-aware enemies with W-slice visibility, 3D health bars, floor-only escape mode |
 | Player Gun System | Visible gun meshes, projectiles, muzzle flash, **auto-fire** while holding |
 | 4D Weapon System | Projectiles have W-coordinate, slice visibility, 4D hit detection |
 | Torus4D | 4D torus shape with parametric equations, slice mesh, collider |
 | Ghost Projections | Transparent full-shape projections for off-slice 4D objects via `ghost` command |
-| Procedural Levels | Connected sphere rooms with portal doors, room types |
-| **Dynamic Sphere Gravity** | Walk like an ant on interior sphere surfaces with smooth rotation |
+| Procedural Levels | Connected sphere rooms with portal doors, **auto-generation on load** |
+| **Dynamic Sphere Gravity** | Walk like an ant on interior sphere surfaces with smooth rotation (fixed room clipping issues) |
 | **Slide Mechanic** | Hold Ctrl while moving to slide with momentum preservation |
 | **Bunny Hop (B-Hop)** | Jump on landing for uncapped speed boosts |
-| **Portal W-Sync** | Host room + adjacent rooms synced to player's W coordinate |
+| **Portal W-Sync** | **Fixed visibility at spawn**, host room + adjacent rooms synced to player's W |
 | **Portal See-Through** | Shader-based holes in sphere mesh show destination room interior |
-| **Portal Traversal** | Walk through portals with velocity boost and W-shift |
-| **Portal Cooldown** | 2s cooldown on both source and target portals |
-
-### ⚠️ Known Issues
-
-| Issue | Description |
-|-------|-------------|
-| Spawn Visibility | Adjacent rooms invisible until first portal traversal |
-| Out of Bounds | Player can end up outside rooms after multiple portal traversals |
+| **Portal Traversal** | **Instant teleport on contact**, velocity boost (40.0), immediate W-sync |
+| **Portal Cooldown** | **Fixed oscillation** via robust cooldown checks on entry/exit |
+| **Projectile Portal Support** | Projectiles transition W-coordinate when crossing portals (bidirectional) |
 
 ### 📋 Future Objectives
 
-- [ ] Fix spawn visibility issue
-- [ ] Fix out-of-bounds after portals
+- [ ] Level generation diversity improvements
 - [ ] Secret rooms at different W values in 4D
 - [ ] More enemy types
 - [ ] Boss encounters
@@ -364,43 +360,31 @@ initial_w = 0.0
 | 2025-12-11 | 0.6.1 | **W-Axis Portal System (WIP)** - Rooms at different W coordinates, portals teleport between rooms |
 | 2025-12-14 | 0.6.2 | **W-Sync Portal Visibility** - Portal see-through via W-coordinate synchronization |
 | 2025-12-17 | 0.6.3 | **Portal Crossing Fix** - Side-based detection (INSIDE/OUTSIDE) eliminates oscillation bugs |
+| 2025-12-20 | 0.7.0 | **Robust Portals & Auto-Gen** - Instant transitions, immediate W-sync, fixed oscillation/floor clipping |
+| 2025-12-20 | 0.7.1 | **Projectile Portal Support** - Projectiles transition W-coordinate bidirectionally through portals |
 
 ---
 
 ## W-Axis Portal System
 
-### Implementation (2025-12-17)
+### Implementation (2025-12-20)
 
-**Approach**: Host room + adjacent rooms graph-based W-sync + side-based crossing detection.
+**Approach**: Instant teleport on portal zone contact + immediate centralized W-sync.
 
-**What's Working**:
+**What's Fixed**:
 
-- ✅ Rooms positioned with unique W values (W = room_id × 30)
-- ✅ Portal see-through via shader holes in sphere mesh
-- ✅ **Host Room W-Sync** - current room + all connected rooms synced to player's W
-- ✅ **Graph-based visibility** - portals always see-through regardless of distance
-- ✅ **Physics-based hole** - player falls through portal (can't stand on it)
-- ✅ **Portal traversal** - side-based crossing detection (INSIDE vs OUTSIDE)
-- ✅ **Velocity boost** - player propelled toward destination room on traversal
-- ✅ **Cooldown system** - 2s cooldown prevents bouncing between rooms
-
-**How It Works**:
-
-1. LevelGenerator tracks player's current room (host room)
-2. On room change → sync host + all adjacent room W coordinates to player's W
-3. Non-adjacent rooms restored to original W (invisible through portals)
-4. Player enters portal zone → entry SIDE recorded (INSIDE/OUTSIDE)
-5. Player exits zone → compare exit SIDE to entry SIDE
-6. If sides differ → player crossed through → W-shift + velocity boost
-7. If sides match → player backed out → no action needed
+- ✅ **Instant Transition**: No delay or "jelly" feel; teleport happens as soon as you touch the portal.
+- ✅ **Overlapping Zone Safety**: Cooldown check on exit prevents ping-ponging between touching rooms.
+- ✅ **Immediate W-Sync**: Portal calls `level_gen._update_room_w_sync` directly after teleport.
+- ✅ **Collision-Aware Generation**: Rooms no longer overlap; generator retries placement until valid.
+- ✅ **Auto-Generation**: `auto_generate` flag in LevelGenerator automates setup.
 
 **Key Files**:
 
-- `level_generator.gd`: `_update_room_w_sync()` - centralized W management via `_original_room_w`
-- `portal_door.gd`: Side-based crossing detection, velocity boost, cooldown
-- `player_controller.gd`: `_is_in_portal_hole()` with distance-based check
-- `room_sphere4d.gd`: Shader portal holes
+- `level_generator.gd`: `_is_position_valid()` check, auto-gen logic, centralized W-sync.
+- `portal_door.gd`: `_perform_portal_transition()` helper, instant entry trigger.
+- `player_controller.gd`: Tightened `_is_in_portal_hole()` to 1.2x/2.0x radius.
 
 ---
 
-*Last updated: 2025-12-17*
+*Last updated: 2025-12-20*
