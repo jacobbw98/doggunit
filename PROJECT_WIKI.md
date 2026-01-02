@@ -38,22 +38,21 @@
 
 ## 🤖 For AI Agents: Active Debug Task
 
-> **Status: 2025-12-20** - Portal system robust, transitioning to gameplay polish
+> **Status: 2026-01-01** - Projectile collision mechanics complete for all gun types
 >
 > **Fixed this session**:
 >
-> - **Room Clipping**: Collisions-aware placement prevents rooms overlapping.
-> - **Spawn Visibility**: W-sync timing fixed (removed premature call).
-> - **Portal Oscillation**: Cooldown check added to transition exit; overlapping zones are now safe.
-> - **Falling Through Floors**: Tightened `_is_in_portal_hole` radius (4.0x -> 1.2x/2.0x) to prevent premature noclip.
-> - **Auto-Level Gen**: Scene `procedural_level.tscn` now spawns a level automatically on load.
-> - **Instant Transitions**: Removed "jelly" delay - you teleport immediately on portal zone contact.
-> - **Immediate W-Sync**: Direct W-sync call after traversal prevents "trapped in space" due to W-mismatch.
-> - **Projectile Portal Support**: Projectiles now transition their W-coordinate when passing through portals.
+> - **Explosive Projectiles**: AOE damage (100% with falloff), knockback, wall collision detection, visual expanding sphere
+> - **Freezing Projectiles**: Freeze enemies (and player) in place for 2 seconds
+> - **Implosive Projectiles**: Pull targets toward impact point
+> - **Accelerating Projectiles**: Pierce through enemies and split into two child projectiles
+> - **Wall Collision**: Distance-based detection for room sphere walls (no physics colliders)
+> - **Player Status Effects**: Player can now be knocked back, frozen, and pulled by enemy projectiles
 >
 > **Outstanding issues**:
 >
 > 1. Level generation can sometimes place portals/rooms in a way that feels "far apart" or repetitive.
+> 2. Visual effects for freeze/implosion could be enhanced.
 
 ---
 
@@ -85,6 +84,10 @@
 | **Portal Traversal** | **Instant teleport on contact**, velocity boost (40.0), immediate W-sync |
 | **Portal Cooldown** | **Fixed oscillation** via robust cooldown checks on entry/exit |
 | **Projectile Portal Support** | Projectiles transition W-coordinate when crossing portals (bidirectional) |
+| **Projectile Collision Types** | Explosive (AOE + knockback), Freezing (2s freeze), Implosive (pull), Accelerating (pierce + split) |
+| **Enemy Status Effects** | Enemies can be frozen, knocked back, and pulled by projectile effects |
+| **Player Status Effects** | Player affected by enemy explosions, freezing, implosion pulls |
+| **Wall Collision Detection** | Distance-based detection for room sphere walls (no physics colliders) |
 
 ### 📋 Future Objectives
 
@@ -362,6 +365,8 @@ initial_w = 0.0
 | 2025-12-17 | 0.6.3 | **Portal Crossing Fix** - Side-based detection (INSIDE/OUTSIDE) eliminates oscillation bugs |
 | 2025-12-20 | 0.7.0 | **Robust Portals & Auto-Gen** - Instant transitions, immediate W-sync, fixed oscillation/floor clipping |
 | 2025-12-20 | 0.7.1 | **Projectile Portal Support** - Projectiles transition W-coordinate bidirectionally through portals |
+| 2026-01-01 | 0.8.0 | **Projectile Collision System** - Explosive AOE/knockback, Freezing, Implosive pull, Accelerating pierce/split |
+| 2026-01-01 | 0.8.1 | **Player Status Effects** - Player can be frozen, knocked back, and pulled by enemy projectiles |
 
 ---
 
@@ -387,4 +392,31 @@ initial_w = 0.0
 
 ---
 
-*Last updated: 2025-12-20*
+## Projectile Collision System
+
+### Implementation (2026-01-01)
+
+**Gun Type Effects**:
+
+| Type | Collision Behavior |
+|------|-------------------|
+| Explosive | AOE damage (100% with distance falloff), knockback force (20), visual expanding sphere |
+| Freezing | Freeze nearby targets for 2 seconds (6 unit radius) |
+| Implosive | Pull targets toward impact point (7 unit radius, 10 force) |
+| Accelerating | Pierce through enemies, split into 2 projectiles with half damage each |
+
+**Wall Detection**:
+
+- Room spheres have no physics colliders (player is manually constrained)
+- Projectiles use distance-based detection: trigger when `dist_to_wall < 1.5`
+- Also supports raycast for regular physics walls
+
+**Key Files**:
+
+- `projectile.gd`: All collision types implemented with `_explode()`, `_freeze_nearby()`, `_implode_nearby()`, `_pierce_and_split()`
+- `enemy_4d.gd` / `enemy_base.gd`: Added `freeze()` and `apply_external_force()` methods
+- `player_controller.gd`: Added `freeze()` and `apply_external_force()` for player status effects
+
+---
+
+*Last updated: 2026-01-01*

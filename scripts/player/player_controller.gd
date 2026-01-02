@@ -50,6 +50,11 @@ var was_grounded_last_frame: bool = false
 var bhop_window_timer: float = 0.0  # Time since landing for bhop window
 const BHOP_WINDOW: float = 0.15  # 150ms window for bhop
 
+# Status effects (from explosions, freezing, implosion pulls)
+var frozen_timer: float = 0.0
+var external_velocity: Vector3 = Vector3.ZERO
+const EXTERNAL_VELOCITY_DECAY: float = 5.0
+
 func _ready() -> void:
 	current_health = max_health
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
@@ -115,6 +120,21 @@ func _physics_process(delta: float) -> void:
 	# DEBUG - print once per second to confirm this is running
 	if Engine.get_frames_drawn() % 60 == 0:
 		print("[Player] _physics_process running, fly_mode=%s" % fly_mode)
+	
+	# Handle frozen state - skip movement controls but still apply physics
+	if frozen_timer > 0:
+		frozen_timer -= delta
+		# Still apply external velocity while frozen
+		if external_velocity.length_squared() > 0.01:
+			velocity = external_velocity
+			external_velocity = external_velocity.lerp(Vector3.ZERO, EXTERNAL_VELOCITY_DECAY * delta)
+			move_and_slide()
+		return
+	
+	# Decay and apply external velocity (knockback, implosion pull)
+	if external_velocity.length_squared() > 0.01:
+		velocity += external_velocity
+		external_velocity = external_velocity.lerp(Vector3.ZERO, EXTERNAL_VELOCITY_DECAY * delta)
 	
 	# Continuous fire while holding shoot button
 	if Input.is_action_pressed("shoot"):
@@ -558,6 +578,16 @@ func _is_near_portal(room: Node) -> bool:
 		if global_position.distance_to(portal_pos) < portal_radius * 3.0:
 			return true
 	return false
+
+## Freeze the player for the given duration (status effect from enemy projectiles)
+func freeze(duration: float) -> void:
+	frozen_timer = max(frozen_timer, duration)
+	print("[Player] FROZEN for %.1f seconds!" % duration)
+
+## Apply an external force to the player (explosion knockback, implosion pull)
+func apply_external_force(force: Vector3) -> void:
+	external_velocity += force
+	print("[Player] External force applied: %s" % str(force))
 
 ## Check if player is in any portal's hole (either in transition zone OR standing on portal)
 ## This makes portals act like holes you fall through, not surfaces you stand on

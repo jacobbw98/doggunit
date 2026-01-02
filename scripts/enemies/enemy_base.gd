@@ -16,6 +16,11 @@ var current_health: int
 var target: Node3D = null
 var gun: Gun = null
 
+# Status effects
+var frozen_timer: float = 0.0
+var external_velocity: Vector3 = Vector3.ZERO
+const EXTERNAL_VELOCITY_DECAY: float = 5.0
+
 func _ready() -> void:
 	current_health = max_health
 	_setup_gun()
@@ -27,6 +32,20 @@ func _setup_gun() -> void:
 		add_child(gun)
 
 func _physics_process(delta: float) -> void:
+	# Handle frozen state
+	if frozen_timer > 0:
+		frozen_timer -= delta
+		if external_velocity.length_squared() > 0.01:
+			velocity = external_velocity
+			external_velocity = external_velocity.lerp(Vector3.ZERO, EXTERNAL_VELOCITY_DECAY * delta)
+			move_and_slide()
+		return
+	
+	# Decay external velocity
+	if external_velocity.length_squared() > 0.01:
+		velocity += external_velocity
+		external_velocity = external_velocity.lerp(Vector3.ZERO, EXTERNAL_VELOCITY_DECAY * delta)
+	
 	if target:
 		_move_towards_target(delta)
 		_try_attack()
@@ -83,3 +102,13 @@ func _drop_gun() -> void:
 
 func set_target(new_target: Node3D) -> void:
 	target = new_target
+
+## Freeze the enemy for the given duration
+func freeze(duration: float) -> void:
+	frozen_timer = max(frozen_timer, duration)
+	print("[EnemyBase] FROZEN for %.1f seconds!" % duration)
+
+## Apply an external force (implosion/knockback)
+func apply_external_force(force: Vector3) -> void:
+	external_velocity += force
+	print("[EnemyBase] External force applied: %s" % str(force))

@@ -33,6 +33,11 @@ var fire_cooldown: float = 0.0
 var gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity")
 var aggro_enabled: bool = true  # When false, enemy won't spot or chase player
 
+# Status effects
+var frozen_timer: float = 0.0  # Time remaining frozen
+var external_velocity: Vector3 = Vector3.ZERO  # Applied by implosive/knockback effects
+const EXTERNAL_VELOCITY_DECAY: float = 5.0  # How fast external velocity decays
+
 # Stuck detection
 var _last_position: Vector3 = Vector3.ZERO
 var _stuck_timer: float = 0.0
@@ -339,6 +344,21 @@ func _find_target() -> void:
 func _physics_process(delta: float) -> void:
 	if fire_cooldown > 0:
 		fire_cooldown -= delta
+	
+	# Handle frozen state
+	if frozen_timer > 0:
+		frozen_timer -= delta
+		# Still apply external velocity even when frozen
+		if external_velocity.length_squared() > 0.01:
+			velocity = external_velocity
+			external_velocity = external_velocity.lerp(Vector3.ZERO, EXTERNAL_VELOCITY_DECAY * delta)
+			move_and_slide()
+		return  # Skip all AI logic when frozen
+	
+	# Decay external velocity
+	if external_velocity.length_squared() > 0.01:
+		velocity += external_velocity
+		external_velocity = external_velocity.lerp(Vector3.ZERO, EXTERNAL_VELOCITY_DECAY * delta)
 	
 	# Update visibility based on current slice (every frame for smooth scaling)
 	var slicers = get_tree().get_nodes_in_group("slicer_4d")
@@ -869,6 +889,16 @@ func _die() -> void:
 	died.emit(self)
 	GameManager.enemy_killed()
 	queue_free()
+
+## Freeze the enemy for the given duration (status effect)
+func freeze(duration: float) -> void:
+	frozen_timer = max(frozen_timer, duration)  # Don't reduce existing freeze
+	print("[Enemy4D] FROZEN for %.1f seconds!" % duration)
+
+## Apply an external force (implosion/knockback)
+func apply_external_force(force: Vector3) -> void:
+	external_velocity += force
+	print("[Enemy4D] External force applied: %s" % str(force))
 
 # Get 4D position for visibility checks
 func get_position_4d() -> Vector4D:
