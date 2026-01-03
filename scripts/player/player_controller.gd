@@ -15,6 +15,22 @@ signal position_4d_changed(pos: Vector4D)
 @export var slide_friction: float = 0.98
 @export var bhop_speed_bonus: float = 1.1  # 10% speed boost on successful bhop
 
+@export_group("Movement Feel")
+## Ground acceleration rate (units/sec²) - higher = snappier
+@export var acceleration: float = 50.0
+## Ground deceleration rate (units/sec²) - higher = faster stops
+@export var deceleration: float = 60.0
+## Air acceleration - lower than ground for less floaty air control
+@export var air_acceleration: float = 10.0
+## Air deceleration - lower for momentum preservation in air
+@export var air_deceleration: float = 5.0
+## Gravity multiplier - higher = faster falls, snappier jumps
+@export var gravity_multiplier: float = 2.0
+## Fall gravity extra multiplier - makes apex feel snappier
+@export var fall_gravity_multiplier: float = 1.5
+## Velocity below this snaps to zero for crisp stops
+@export var stop_threshold: float = 0.5
+
 @export_group("Stats")
 @export var max_health: int = 100
 
@@ -197,34 +213,30 @@ func _physics_process_3d(delta: float, direction: Vector3, speed: float, raw_inp
 		print("[Player] Checking %d rooms in 'room_spheres_4d' group, player pos=%s" % [rooms_in_group.size(), global_position])
 	
 	# Find the room we're MOST INSIDE of (highest score = best match)
-	# Score = inside_dist + W_match_bonus (prioritize rooms at matching W)
+	# IMPORTANT: Only consider rooms at matching W coordinate to prevent
+	# interaction with overlapping rooms at different W slices
 	for room in rooms_in_group:
 		if room.has_method("get_spawn_position"):
 			var r_center: Vector3 = room.global_position
 			var r_radius: float = room.radius if room.get("radius") else 20.0
 			var dist_to_center := global_position.distance_to(r_center)
+			
+			# FIRST: Check W-coordinate match - SKIP rooms with mismatched W
+			if room.get("_position_4d") != null and position_4d != null:
+				var room_w: float = room._position_4d.w
+				var player_w: float = position_4d.w
+				var w_dist: float = abs(room_w - player_w)
+				# Only consider rooms within W-radius (visible to player)
+				if w_dist > r_radius:
+					continue  # Skip this room entirely - wrong W slice
+			
 			# Check if inside this room OR very close to its surface (for transitions)
 			if dist_to_center < r_radius + 5.0:
 				# inside_dist: positive = inside, higher = deeper inside
 				var inside_dist := r_radius - dist_to_center
-				
-				# W-coordinate bonus: strongly prefer rooms that match player's W
-				var w_bonus: float = 0.0
-				if room.get("_position_4d") != null and position_4d != null:
-					var room_w: float = room._position_4d.w
-					var player_w: float = position_4d.w
-					var w_dist: float = abs(room_w - player_w)
-					# If W matches (within room radius), give huge bonus
-					# If W is far off, give penalty
-					if w_dist < r_radius:
-						w_bonus = 100.0  # Strong preference for W-matching rooms
-					else:
-						w_bonus = -w_dist  # Penalty for W-mismatched rooms
-				
-				var score := inside_dist + w_bonus
-				# Prefer the room with the HIGHEST score
-				if score > best_inside_dist:
-					best_inside_dist = score
+				# Prefer the room we're MOST INSIDE of
+				if inside_dist > best_inside_dist:
+					best_inside_dist = inside_dist
 					current_room = room
 					room_center = r_center
 					room_radius = r_radius
@@ -260,9 +272,13 @@ func _physics_process_3d(delta: float, direction: Vector3, speed: float, raw_inp
 		# Check if player is in a portal hole (for physics exemptions)
 		var in_portal := _is_in_portal_hole(global_position, current_room)
 		
-		# Apply gravity toward the wall
+		# Apply gravity toward the wall (with multiplier for snappy feel)
 		if not is_grounded:
-			velocity += grav_dir * gravity * delta
+			# Use higher gravity when falling (velocity toward wall = falling)
+			var grav_mult := gravity_multiplier
+			if velocity.dot(grav_dir) > 0:  # Moving toward wall = falling
+				grav_mult *= fall_gravity_multiplier
+			velocity += grav_dir * gravity * grav_mult * delta
 		else:
 			# On the wall - reduce velocity toward wall UNLESS in portal hole
 			# Portal holes need to allow outward velocity to pass through
@@ -338,14 +354,31 @@ func _physics_process_3d(delta: float, direction: Vector3, speed: float, raw_inp
 			current_momentum *= slide_friction
 			horizontal_vel = slide_direction * current_momentum
 		elif raw_input.length_squared() > 0.01:
-			# Normal movement
+			# Normal movement with acceleration (snappy feel)
 			var move_speed := speed + current_momentum * 0.5  # Momentum adds to speed
 			var local_move := Vector3(raw_input.x * move_speed, 0, raw_input.z * move_speed)
-			horizontal_vel = global_transform.basis * local_move
+			var target_vel := global_transform.basis * local_move
+			
+			# Use acceleration rate (different for ground vs air)
+			var accel := acceleration if is_grounded else air_acceleration
+			horizontal_vel = horizontal_vel.move_toward(target_vel, accel * delta)
+			
 			# Slowly decay momentum when walking
 			current_momentum = lerpf(current_momentum, 0.0, 2.0 * delta)
 		else:
-			horizontal_vel = horizontal_vel.lerp(Vector3.ZERO, 5.0 * delta)
+			# Deceleration: 60 when standing, 0 when crouching (infinite bhop speed!)
+			# crouch_pressed already declared above in slide logic
+			if crouch_pressed:
+				# No deceleration while crouching - preserve all momentum for bhops
+				pass
+			else:
+				# Snappy deceleration when standing
+				horizontal_vel = horizontal_vel.move_toward(Vector3.ZERO, deceleration * delta)
+				
+				# Snap to zero below threshold for crisp stops
+				if horizontal_vel.length() < stop_threshold:
+					horizontal_vel = Vector3.ZERO
+			
 			current_momentum = lerpf(current_momentum, 0.0, 3.0 * delta)
 		
 		# Recombine: gravity/jump stays, movement is applied horizontally
@@ -392,9 +425,9 @@ func _physics_process_3d(delta: float, direction: Vector3, speed: float, raw_inp
 				velocity = Vector3.ZERO
 				print("[Player] RECOVERY: Clamped to room at %s" % nearest_center)
 			
-			# Apply gravity toward that sphere
+			# Apply gravity toward that sphere (with multiplier for snappy feel)
 			var grav_dir := dir_from_center
-			velocity += grav_dir * gravity * delta
+			velocity += grav_dir * gravity * gravity_multiplier * delta
 			
 			# Update orientation
 			current_gravity_up = current_gravity_up.lerp(-dir_from_center, 8.0 * delta).normalized()

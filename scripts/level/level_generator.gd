@@ -370,18 +370,26 @@ func _assign_room_types() -> void:
 	for room_id in room_graph:
 		var room_type: int = room_graph[room_id]["type"]
 		var size_mult: float = ROOM_SIZES.get(room_type, 1.0)
-		if room_type == ROOM_NORMAL and randf() < 0.3:
-			size_mult = 1.5  # Some normal rooms are larger
+		if room_type == ROOM_NORMAL:
+			size_mult = randf_range(1.0, 2.0)  # Normal rooms vary from 1x to 2x
 		room_graph[room_id]["size_mult"] = size_mult
 
 ## Check if a proposed room position overlaps with any already-placed rooms
 ## Returns true if there is NO overlap (position is valid)
-func _is_position_valid(proposed_pos: Vector3, proposed_radius: float, room_positions: Dictionary, exclude_room_id: int = -1) -> bool:
-	for room_id in room_positions:
-		if room_id == exclude_room_id:
+## Allows overlap for rooms 2+ graph edges apart (they'll be in different W slices)
+func _is_position_valid(proposed_pos: Vector3, proposed_radius: float, room_positions: Dictionary, new_room_id: int, parent_room_id: int = -1) -> bool:
+	for existing_room_id in room_positions:
+		if existing_room_id == parent_room_id:
 			continue
-		var existing_pos: Vector4D = room_positions[room_id]
-		var existing_radius: float = base_room_radius * room_graph[room_id].get("size_mult", 1.0)
+		
+		# Allow overlap for rooms 3+ graph distance apart (BFS distance check)
+		# Distance 1-2 can be visible together (via W-sync when in shared neighbor)
+		var graph_dist: int = _get_graph_distance(new_room_id, existing_room_id)
+		if graph_dist >= 3:
+			continue  # These rooms can never be visible together, overlap is OK
+		
+		var existing_pos: Vector4D = room_positions[existing_room_id]
+		var existing_radius: float = base_room_radius * room_graph[existing_room_id].get("size_mult", 1.0)
 		
 		# Calculate distance between room centers
 		var dist: float = proposed_pos.distance_to(existing_pos.to_vector3())
@@ -393,6 +401,30 @@ func _is_position_valid(proposed_pos: Vector3, proposed_radius: float, room_posi
 		if dist < min_dist:
 			return false  # Overlap detected
 	return true
+
+## Get the shortest graph distance between two rooms using BFS
+func _get_graph_distance(room_a: int, room_b: int) -> int:
+	if room_a == room_b:
+		return 0
+	if not room_graph.has(room_a) or not room_graph.has(room_b):
+		return 999  # Unknown rooms treated as far apart
+	
+	# BFS from room_a to room_b
+	var visited: Dictionary = {room_a: 0}
+	var queue: Array = [room_a]
+	
+	while queue.size() > 0:
+		var current: int = queue.pop_front()
+		var current_dist: int = visited[current]
+		
+		for neighbor in room_graph[current]["connections"]:
+			if neighbor == room_b:
+				return current_dist + 1
+			if not visited.has(neighbor):
+				visited[neighbor] = current_dist + 1
+				queue.append(neighbor)
+	
+	return 999  # Not connected
 
 ## Spawn room spheres with W-axis positioning
 ## Rooms touch at portal points, each at different W coordinate
@@ -426,7 +458,7 @@ func _spawn_rooms_grid() -> void:
 			var touch_distance: float = current_radius + target_radius
 			
 			# Try multiple directions to find a non-overlapping position
-			var max_attempts: int = 20
+			var max_attempts: int = 50
 			var portal_dir: Vector3 = Vector3.ZERO
 			var target_xyz: Vector3 = Vector3.ZERO
 			var found_valid_position: bool = false
@@ -443,7 +475,7 @@ func _spawn_rooms_grid() -> void:
 				target_xyz = current_pos.to_vector3() + portal_dir * touch_distance
 				
 				# Check for overlaps with all already-placed rooms (except current)
-				if _is_position_valid(target_xyz, target_radius, room_positions, current_id):
+				if _is_position_valid(target_xyz, target_radius, room_positions, target_id, current_id):
 					found_valid_position = true
 					break
 				elif attempt == max_attempts - 1:

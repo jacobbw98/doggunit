@@ -38,21 +38,19 @@
 
 ## 🤖 For AI Agents: Active Debug Task
 
-> **Status: 2026-01-01** - Projectile collision mechanics complete for all gun types
+> **Status: 2026-01-02** - Movement system overhaul and W-collision fixes
 >
 > **Fixed this session**:
 >
-> - **Explosive Projectiles**: AOE damage (100% with falloff), knockback, wall collision detection, visual expanding sphere
-> - **Freezing Projectiles**: Freeze enemies (and player) in place for 2 seconds
-> - **Implosive Projectiles**: Pull targets toward impact point
-> - **Accelerating Projectiles**: Pierce through enemies and split into two child projectiles
-> - **Wall Collision**: Distance-based detection for room sphere walls (no physics colliders)
-> - **Player Status Effects**: Player can now be knocked back, frozen, and pulled by enemy projectiles
+> - **Snappy Movement System**: Replaced lerp deceleration with move_toward for 12x faster stops
+> - **Crouch Momentum Preservation**: 0 deceleration while crouching enables infinite bhop speed building
+> - **W-Coordinate Collision Fix**: Player now skips rooms at different W slices entirely
+> - **Gravity Multipliers**: 2x gravity + 1.5x fall gravity for snappier jumps
 >
 > **Outstanding issues**:
 >
-> 1. Level generation can sometimes place portals/rooms in a way that feels "far apart" or repetitive.
-> 2. Visual effects for freeze/implosion could be enhanced.
+> 1. Some rooms may not be connected to the main graph (BFS disconnection bug)
+> 2. Visual effects for freeze/implosion could be further enhanced
 
 ---
 
@@ -88,6 +86,12 @@
 | **Enemy Status Effects** | Enemies can be frozen, knocked back, and pulled by projectile effects |
 | **Player Status Effects** | Player affected by enemy explosions, freezing, implosion pulls |
 | **Wall Collision Detection** | Distance-based detection for room sphere walls (no physics colliders) |
+| **Projectile Visual Effects** | Freeze (blue sphere flash) and Implosion (purple shrinking sphere) animations |
+| **Room Size Variation** | Normal rooms range from 1x-2x radius for level diversity |
+| **Overlap Prevention** | Graph distance ≥3 check ensures visible rooms never intersect |
+| **Snappy Movement System** | Tunable acceleration/deceleration, gravity multipliers, stop threshold for responsive feel |
+| **Crouch Momentum** | 0 deceleration while crouching enables infinite bhop speed building |
+| **W-Coord Room Collision** | Player only interacts with rooms at matching W-coordinate |
 
 ### 📋 Future Objectives
 
@@ -367,6 +371,11 @@ initial_w = 0.0
 | 2025-12-20 | 0.7.1 | **Projectile Portal Support** - Projectiles transition W-coordinate bidirectionally through portals |
 | 2026-01-01 | 0.8.0 | **Projectile Collision System** - Explosive AOE/knockback, Freezing, Implosive pull, Accelerating pierce/split |
 | 2026-01-01 | 0.8.1 | **Player Status Effects** - Player can be frozen, knocked back, and pulled by enemy projectiles |
+| 2026-01-02 | 0.8.2 | **Projectile Visual Effects** - Freezing (blue flash) and Implosion (shrinking purple sphere) animations |
+| 2026-01-02 | 0.8.3 | **Level Gen Improvements** - Room sizes 1x-2x, graph distance ≥3 overlap rule, 50 positioning attempts |
+| 2026-01-02 | 0.8.4 | **Snappy Movement System** - Tunable accel/decel, gravity multipliers, move_toward for crisp stops |
+| 2026-01-02 | 0.8.5 | **Crouch Momentum** - 0 deceleration while crouching for infinite bhop speed building |
+| 2026-01-02 | 0.8.6 | **W-Coord Room Collision** - Player skips rooms at different W slices, fixes intersecting room interaction |
 
 ---
 
@@ -419,4 +428,58 @@ initial_w = 0.0
 
 ---
 
-*Last updated: 2026-01-01*
+## Level Generation Improvements
+
+### Implementation (2026-01-02)
+
+**Room Size Variation**:
+
+- Normal rooms now have size multiplier `randf_range(1.0, 2.0)` instead of fixed values
+- Creates more visually diverse level layouts
+
+**Overlap Prevention**:
+
+- Rooms can only overlap in 3D if they are **≥3 graph edges apart**
+- Distance 1: Adjacent rooms visible together
+- Distance 2: Rooms sharing a neighbor visible together when in that neighbor
+- Distance 3+: Can never be visible simultaneously → safe to overlap
+
+**Positioning Improvements**:
+
+- Increased `max_attempts` from 20 to 50 for finding valid tangent positions
+- Added `_get_graph_distance()` BFS function for overlap checks
+
+---
+
+## Snappy Movement System
+
+### Implementation (2026-01-02)
+
+**Problem**: Movement felt "floaty" due to slow lerp-based deceleration and default gravity.
+
+**Solution**: Replaced `lerp()` with `move_toward()` for linear deceleration, added gravity multipliers, and exposed all parameters as `@export` variables.
+
+### Tunable Parameters
+
+All values adjustable in Inspector under **Movement Feel**:
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `acceleration` | 50.0 | Ground acceleration (units/sec²) |
+| `deceleration` | 60.0 | Ground stopping speed (12x faster than before) |
+| `air_acceleration` | 10.0 | Reduced air control for less floaty feel |
+| `air_deceleration` | 5.0 | Air friction |
+| `gravity_multiplier` | 2.0 | Faster falls overall |
+| `fall_gravity_multiplier` | 1.5 | Extra gravity when falling (not rising) |
+| `stop_threshold` | 0.5 | Velocity snaps to zero below this |
+
+### Tuning Guide
+
+- **More slide**: Lower `deceleration` to 30-40
+- **More air control**: Raise `air_acceleration` to 20-30
+- **Floatier jumps**: Lower `gravity_multiplier` to 1.5
+- **Crispier stops**: Raise `stop_threshold` to 1.0
+
+---
+
+*Last updated: 2026-01-02*

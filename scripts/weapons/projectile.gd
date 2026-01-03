@@ -389,19 +389,63 @@ func _spawn_explosion_effect() -> void:
 ## FREEZING: Freeze nearby targets
 func _freeze_nearby() -> void:
 	print("[Projectile] FREEZE BURST!")
+	
+	# Spawn visual effect
+	_spawn_freeze_effect()
+	
 	var nearby: Array[Node] = _get_nearby_targets(FREEZE_RADIUS)
 	
 	for target in nearby:
 		if target.has_method("freeze"):
 			target.freeze(FREEZE_DURATION)
 			print("[Projectile] Froze %s" % target.name)
+
+
+## Spawn the translucent blue sphere visual effect for freezing
+func _spawn_freeze_effect() -> void:
+	var effect := Node3D.new()
+	effect.name = "FreezeEffect"
+	effect.global_position = global_position
 	
-	# TODO: Add visual freeze effect
+	# Create sphere mesh at full radius immediately
+	var mesh_instance := MeshInstance3D.new()
+	var sphere := SphereMesh.new()
+	sphere.radius = FREEZE_RADIUS
+	sphere.height = FREEZE_RADIUS * 2.0
+	mesh_instance.mesh = sphere
+	
+	# Translucent blue material
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.3, 0.8, 1.0, 0.5)  # Cyan, semi-transparent
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.emission_enabled = true
+	mat.emission = Color(0.3, 0.8, 1.0)
+	mat.emission_energy_multiplier = 1.5
+	mesh_instance.material_override = mat
+	
+	effect.add_child(mesh_instance)
+	get_tree().current_scene.add_child(effect)
+	
+	# Animate a brief flash then fade
+	var tween := effect.create_tween()
+	tween.set_parallel(true)
+	
+	# Quick fade out
+	tween.tween_property(mat, "albedo_color:a", 0.0, 0.25).set_ease(Tween.EASE_IN)
+	tween.tween_property(mat, "emission_energy_multiplier", 0.0, 0.25)
+	
+	# Destroy after animation
+	tween.chain().tween_callback(effect.queue_free)
 
 
 ## IMPLOSIVE: Pull targets toward impact point
 func _implode_nearby() -> void:
 	print("[Projectile] IMPLOSION!")
+	
+	# Spawn visual effect
+	_spawn_implosion_effect()
+	
 	var nearby: Array[Node] = _get_nearby_targets(IMPLOSION_RADIUS)
 	var impact_point: Vector3 = global_position
 	
@@ -417,8 +461,48 @@ func _implode_nearby() -> void:
 		if target.has_method("apply_external_force"):
 			target.apply_external_force(force)
 			print("[Projectile] Pulled %s toward impact" % target.name)
+
+
+## Spawn the purple shrinking sphere visual effect for implosion
+func _spawn_implosion_effect() -> void:
+	var effect := Node3D.new()
+	effect.name = "ImplosionEffect"
+	effect.global_position = global_position
 	
-	# TODO: Add visual implosion effect
+	# Create sphere mesh starting at full radius
+	var mesh_instance := MeshInstance3D.new()
+	var sphere := SphereMesh.new()
+	sphere.radius = 0.1
+	sphere.height = 0.2
+	mesh_instance.mesh = sphere
+	mesh_instance.scale = Vector3.ONE * IMPLOSION_RADIUS * 2.0  # Start big
+	
+	# Translucent purple material
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.6, 0.2, 1.0, 0.6)  # Purple, semi-transparent
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.emission_enabled = true
+	mat.emission = Color(0.5, 0.1, 0.9)
+	mat.emission_energy_multiplier = 2.0
+	mesh_instance.material_override = mat
+	
+	effect.add_child(mesh_instance)
+	get_tree().current_scene.add_child(effect)
+	
+	# Animate the shrink (opposite of explosion)
+	var tween := effect.create_tween()
+	tween.set_parallel(true)
+	
+	# Shrink to zero
+	tween.tween_property(mesh_instance, "scale", Vector3.ZERO, 0.25).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_EXPO)
+	
+	# Fade out
+	tween.tween_property(mat, "albedo_color:a", 0.0, 0.25).set_ease(Tween.EASE_IN)
+	tween.tween_property(mat, "emission_energy_multiplier", 0.0, 0.25)
+	
+	# Destroy after animation
+	tween.chain().tween_callback(effect.queue_free)
 
 
 ## ACCELERATING: Pierce through and split into two
