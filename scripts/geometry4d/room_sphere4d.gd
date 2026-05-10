@@ -309,3 +309,11 @@ func get_spawn_position() -> Vector3:
 	# Position well inside the sphere wall so player doesn't clip
 	var spawn_offset: float = radius - 5.0  # 5 units inside from the wall
 	return global_position + Vector3(0, -spawn_offset, 0)
+
+## Get world-space positions of all portal doors in this room
+func get_portal_positions() -> Array:
+	var positions: Array = []
+	for portal in portals:
+		if is_instance_valid(portal):
+			positions.append(portal.global_position)
+	return positions

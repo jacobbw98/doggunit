@@ -38,17 +38,27 @@
 
 ## 🤖 For AI Agents: Active Debug Task
 
-> **Status: 2026-01-02** - Movement system overhaul and W-collision fixes
+> **Status: 2026-05-10** - Room Decoration System (orientation bug)
 >
-> **Fixed this session**:
+> **Current task**: Fix 3D model orientation on interior sphere surfaces
 >
-> - **Snappy Movement System**: Replaced lerp deceleration with move_toward for 12x faster stops
-> - **Crouch Momentum Preservation**: 0 deceleration while crouching enables infinite bhop speed building
-> - **W-Coordinate Collision Fix**: Player now skips rooms at different W slices entirely
-> - **Gravity Multipliers**: 2x gravity + 1.5x fall gravity for snappier jumps
+> **What works**:
+> - Models spawn at correct positions on the sphere's inner wall
+> - Variety of models load correctly (trees, rocks, houses, well)
+> - Scale is proportional to room radius (min_scale/max_scale = fraction of radius)
+> - Room-type-specific decoration profiles work (boss=sparse rocks, special=dense forest, etc.)
+> - Portal avoidance spacing works
 >
-> **Outstanding issues**:
+> **What's broken**: Model ORIENTATION
+> - Trees sometimes appear correct but rocks and wells are sideways/wrong angle
+> - The wrapper Node3D approach (Y = toward center) doesn't consistently orient all GLB models
+> - Root cause: GLB models likely have inconsistent internal transforms/rotations in their scene hierarchy
 >
+> **Next step**: Open each GLB in Godot editor to inspect their internal node hierarchy and transforms.
+> Models may need per-model rotation corrections, or the orientation method needs to account for
+> the actual "up" axis of each model.
+>
+> **Other outstanding issues**:
 > 1. Some rooms may not be connected to the main graph (BFS disconnection bug)
 > 2. Visual effects for freeze/implosion could be further enhanced
 
@@ -92,6 +102,7 @@
 | **Snappy Movement System** | Tunable acceleration/deceleration, gravity multipliers, stop threshold for responsive feel |
 | **Crouch Momentum** | 0 deceleration while crouching enables infinite bhop speed building |
 | **W-Coord Room Collision** | Player only interacts with rooms at matching W-coordinate |
+| **Room Decorations (WIP)** | 3D models (trees, rocks, houses, well) placed on interior sphere surfaces with per-room-type theming. **Orientation bug**: some models appear sideways |
 
 ### 📋 Future Objectives
 
@@ -294,7 +305,8 @@ doggunit/
 │   │   ├── level_generator.gd
 │   │   ├── room_types.gd
 │   │   ├── portal_door.gd
-│   │   └── portal_tube.gd
+│   │   ├── portal_tube.gd
+│   │   └── room_decorator.gd    # Places 3D models on sphere interiors (WIP: orientation bug)
 │   ├── player/              # Player scripts
 │   │   └── player_controller.gd
 │   ├── weapons/             # Gun system
@@ -376,6 +388,7 @@ initial_w = 0.0
 | 2026-01-02 | 0.8.4 | **Snappy Movement System** - Tunable accel/decel, gravity multipliers, move_toward for crisp stops |
 | 2026-01-02 | 0.8.5 | **Crouch Momentum** - 0 deceleration while crouching for infinite bhop speed building |
 | 2026-01-02 | 0.8.6 | **W-Coord Room Collision** - Player skips rooms at different W slices, fixes intersecting room interaction |
+| 2026-05-10 | 0.9.0 | **Room Decorations (WIP)** - 3D models on sphere interiors, wrapper-based orientation, room-type profiles. Known bug: model orientation inconsistent |
 
 ---
 
@@ -451,6 +464,68 @@ initial_w = 0.0
 
 ---
 
+## Room Decoration System
+
+### Implementation (2026-05-10) — WIP
+
+**Purpose**: Populate interior sphere rooms with 3D decorative models (trees, rocks, houses, well) to break up visual monotony.
+
+**Architecture**:
+
+- `RoomDecorator` class (`scripts/level/room_decorator.gd`) — instantiated by `LevelGenerator`
+- Called after portal creation in `_decorate_rooms()` pipeline step
+- Uses a **wrapper Node3D** for sphere-surface orientation (Y = toward center)
+- Model instance added as child of wrapper with `Transform3D.IDENTITY` to strip GLB root transforms
+
+**Model Catalog** (from `res://resources/Models/`):
+
+| Model | Native AABB Height | Scale Range (× radius) | Category |
+|-------|-------------------|----------------------|----------|
+| oaktree.glb | 1.38 | 0.15–0.30 | tree |
+| pinetree.glb | 3.63 | 0.15–0.30 | tree |
+| minipinetree.glb | 1.37 | 0.10–0.20 | tree |
+| single rock.glb | 0.13 | 0.05–0.12 | rock |
+| small rock cluster.glb | 0.16 | 0.05–0.12 | rock |
+| big rock cluster.glb | 0.33 | 0.08–0.15 | rock |
+| House1.1.glb | 2.16 | 0.10–0.20 | structure |
+| house2.2.glb | ~2.0 | 0.10–0.20 | structure |
+| well.glb | 0.54 | 0.05–0.10 | structure |
+
+> **Note**: Most models have their AABB min_y ≈ 3.49, meaning geometry is offset ~3.5 units above the GLB root origin. This is a known complication for grounding logic.
+
+**Room Type Profiles**:
+
+| Room Type | Density | Categories | Structure Chance |
+|-----------|---------|-----------|------------------|
+| Normal | 1.0 | tree, rock, structure | 15% |
+| Boss | 0.3 | rock only | 0% |
+| Item | 0.5 | rock, structure | 80% |
+| Shop | 0.6 | structure, rock | 90% |
+| Gambling | 0.4 | rock only | 30% |
+| Special | 2.0 | tree, rock | 5% |
+
+**Placement Logic**:
+
+1. Random point on sphere surface: `center + dir * (radius - 1.0)`
+2. Portal avoidance: skip points within 6-unit arc distance of portals
+3. Decoration spacing: minimum 3 units between any two decorations
+4. Scale: `room_radius * randf_range(min_scale, max_scale)`
+
+**Known Bug — Model Orientation**:
+
+The wrapper Node3D sets `basis.y = toward_center`, which should make models stand upright from the sphere surface. However:
+- **Trees**: Sometimes appear correct, sometimes sideways
+- **Rocks/Well**: Consistently wrong orientation
+- **Root cause**: GLB models have inconsistent internal transforms in their scene hierarchy. Resetting the root node's transform to identity (`Transform3D.IDENTITY`) doesn't fix child node transforms.
+
+**To Debug Next**:
+1. Open each GLB in Godot editor → inspect the node tree and per-node transforms
+2. Determine each model's actual "up" axis
+3. Either add per-model rotation corrections to the catalog, or find a universal fix
+4. Consider using `look_at` on the wrapper instead of manual basis construction
+
+---
+
 ## Snappy Movement System
 
 ### Implementation (2026-01-02)
@@ -482,4 +557,4 @@ All values adjustable in Inspector under **Movement Feel**:
 
 ---
 
-*Last updated: 2026-01-02*
+*Last updated: 2026-05-10*

@@ -1,7 +1,7 @@
 63f7b34db8d8cdea90c76aacccf841ec
-::res://::1778399119
+::res://::1778404594
 icon.svg::CompressedTexture2D::578858237156870927::1764953735::1767331267::1::::<><><>0<>0<>816ad409be0168be43d5b85880751f30<>res://.godot/imported/icon.svg-218a8f2b3041327d8a5756f3a245f83b.ctex::
-PROJECT_WIKI.md::TextFile::-1::1767424091::0::1::::<><><>0<>0<><>::
+PROJECT_WIKI.md::TextFile::-1::1778401176::0::1::::<><><>0<>0<><>::
 README.md::TextFile::-1::1765967368::0::1::::<><><>0<>0<><>::
 well.glb::PackedScene::630539795958139357::1768365532::1768365532::1::::<><><>0<>0<>c3c7c5a610ad272298fd1b293201d185<>res://.godot/imported/well.glb-8fac0a7446475a63271d3679c32da5ee.scn::
 ::res://assets/::1765261265
@@ -11,7 +11,7 @@ grass_lowpoly.png::CompressedTexture2D::8234570512104994530::1765263900::1765264
 ::res://resources/guns/::1764928594
 starter_pupper.tres::Resource/GunStats::1161741109648888::1764928594::0::1::::<><><>0<>0<><>::res://scripts/weapons/gun_stats.gd
 ::res://resources/materials/::1764953686
-::res://resources/Models/::1768365819
+::res://resources/Models/::1778399121
 big rock cluster.glb::PackedScene::1401591684670608917::1768365817::1778399121::1::::<><><>0<>0<>1cd7e4aff92784e9c4ad8c62282106f7<>res://.godot/imported/big rock cluster.glb-0b96b4e1e928175d81bf4aef896142e5.scn::
 House1.1.glb::PackedScene::842928731864285718::1768365817::1778399121::1::::<><><>0<>0<>1c996456a919b1d3ce7aba4a82ca6974<>res://.godot/imported/House1.1.glb-c19a469754429ce4e6e3b4a8ff72652e.scn::
 house2.2.glb::PackedScene::8811058681186599124::1768365817::1778399121::1::::<><><>0<>0<>4be2b162dda549be6bd3c86f920fe6f5<>res://.godot/imported/house2.2.glb-abf769d1efe0c5d7936bc6c42ceea95a.scn::
@@ -52,12 +52,13 @@ collider4d.gd::GDScript::7484736651798866639::1765791445::0::1::::Collider4D<>Re
 hypersphere4d.gd::GDScript::9040118555295222922::1765233519::0::1::::Hypersphere4D<>Object4D<><>0<>0<><>::
 klein_bottle4d.gd::GDScript::4710429981925540907::1765233540::0::1::::KleinBottle4D<>Object4D<><>0<>0<><>::
 object4d.gd::GDScript::6579981621410055998::1765791445::0::1::::Object4D<>Node3D<><>0<>0<><>::
-room_sphere4d.gd::GDScript::7913225016544465784::1765791445::0::1::::RoomSphere4D<>Object4D<><>0<>0<><>::
+room_sphere4d.gd::GDScript::7913225016544465784::1778401126::0::1::::RoomSphere4D<>Object4D<><>0<>0<><>::
 torus4d.gd::GDScript::5926443928127866994::1765233564::0::1::::Torus4D<>Object4D<><>0<>0<><>::
-::res://scripts/level/::1766453460
-level_generator.gd::GDScript::6813115849503015867::1767422477::0::1::::LevelGenerator<>Node<><>0<>0<><>::
+::res://scripts/level/::1778401281
+level_generator.gd::GDScript::6813115849503015867::1778401150::0::1::::LevelGenerator<>Node<><>0<>0<><>::
 portal_door.gd::GDScript::8464663665952445155::1766453460::0::1::::PortalDoor<>Node3D<><>0<>0<><>::
 portal_tube.gd::GDScript::7204883344352227894::1765237205::0::1::::PortalTube<>Node3D<><>0<>0<><>::
+room_decorator.gd::GDScript::1269605917429860082::1778404568::0::1::::RoomDecorator<>RefCounted<><>0<>0<><>::
 room_types.gd::GDScript::4124057729834799777::1765235903::0::1::::RoomTypes<>RefCounted<><>0<>0<><>::
 ::res://scripts/math4d/::1764988271
 isocline.gd::GDScript::1141682003952832984::1764981545::0::1::::Isocline<>RefCounted<><>0<>0<><>::

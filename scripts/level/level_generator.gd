@@ -18,6 +18,9 @@ const W_SPACING: float = 30.0
 ## Auto-generate level on scene load
 @export var auto_generate: bool = false
 
+## Enable room decorations (3D models on sphere surfaces)
+@export var enable_decorations: bool = true
+
 ## Generated rooms
 var rooms: Array = []
 
@@ -29,6 +32,9 @@ var player: Node = null
 
 ## Current level depth/difficulty
 var level_depth: int = 1
+
+## Room decorator instance
+var _decorator: RoomDecorator = null
 
 ## Room type constants (to avoid class_name issues)
 const ROOM_NORMAL := 0
@@ -228,6 +234,10 @@ func generate_level(custom_seed: int = 0) -> void:
 	
 	# Connect rooms with portals
 	_create_portals()
+	
+	# Decorate rooms with 3D models (after portals so we know where they are)
+	if enable_decorations:
+		_decorate_rooms()
 	
 	# Notify surfaces of new geometry
 	await get_tree().process_frame
@@ -621,6 +631,23 @@ func _create_portal_pair(PortalDoorScript: Script, source_room: Node, target_roo
 	
 	# Link portals together and activate see-through rendering
 	source_portal.link_to_portal(target_portal)
+
+## Decorate all rooms with 3D model props on their interior surfaces
+func _decorate_rooms() -> void:
+	if not _decorator:
+		_decorator = RoomDecorator.new()
+	
+	for room_id in range(rooms.size()):
+		var room = rooms[room_id]
+		if not is_instance_valid(room):
+			continue
+		
+		var room_type: int = room_graph[room_id]["type"]
+		var portal_positions: Array = room.get_portal_positions() if room.has_method("get_portal_positions") else []
+		
+		_decorator.decorate_room(room, room_type, portal_positions)
+	
+	print("[LevelGenerator] Room decoration complete")
 
 ## Notify all surface walkers to refresh their surface list
 func _notify_surface_walkers() -> void:
