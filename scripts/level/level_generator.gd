@@ -492,6 +492,24 @@ func _spawn_rooms_grid() -> void:
 					randf_range(-1, 1)
 				).normalized()
 				
+				# Check if this portal direction is too close to any existing portals in current_id
+				var direction_too_close := false
+				if room_graph[current_id].has("portal_dirs"):
+					var min_dot := 0.64  # cos(50 degrees)
+					if attempt >= 40:
+						min_dot = 0.94  # Enforce at least 20 degrees spacing
+					elif attempt >= 25:
+						min_dot = 0.82  # cos(35 degrees)
+					
+					for existing_target_id in room_graph[current_id]["portal_dirs"]:
+						var existing_dir: Vector3 = room_graph[current_id]["portal_dirs"][existing_target_id]
+						if portal_dir.dot(existing_dir) > min_dot:
+							direction_too_close = true
+							break
+				
+				if direction_too_close:
+					continue
+				
 				# Position target room center at touch distance from current room
 				target_xyz = current_pos.to_vector3() + portal_dir * touch_distance
 				
@@ -615,7 +633,8 @@ func _create_portals() -> void:
 			# Get stored portal direction, or calculate if missing
 			var direction: Vector3 = portal_dirs.get(target_id, Vector3.ZERO)
 			if direction.length_squared() < 0.01:
-				direction = (target_room.global_position - source_room.global_position).normalized()
+				var base_dir = (target_room.global_position - source_room.global_position).normalized()
+				direction = _find_loop_portal_direction(source_room, target_room, base_dir)
 			
 			# Create portal pair with W coordinates
 			_create_portal_pair(PortalDoorScript, source_room, target_room, direction)
@@ -642,6 +661,55 @@ func _create_portal_pair(PortalDoorScript: Script, source_room: Node, target_roo
 	
 	# Link portals together and activate see-through rendering
 	source_portal.link_to_portal(target_portal)
+
+## Find a direction for a loop connection portal that doesn't overlap with existing portals in either room
+func _find_loop_portal_direction(source_room: Node, target_room: Node, base_dir: Vector3) -> Vector3:
+	var max_attempts := 50
+	var source_portals = source_room.get_portals()
+	var target_portals = target_room.get_portals()
+	
+	for attempt in range(max_attempts):
+		var min_dot := 0.64  # cos(50 degrees)
+		if attempt >= 40:
+			min_dot = 0.94  # cos(20 degrees)
+		elif attempt >= 25:
+			min_dot = 0.82  # cos(35 degrees)
+			
+		var candidate: Vector3
+		if attempt == 0:
+			candidate = base_dir
+		else:
+			var jitter := Vector3(
+				randf_range(-1, 1),
+				randf_range(-0.5, 0.5),
+				randf_range(-1, 1)
+			).normalized() * (float(attempt) / max_attempts)
+			candidate = (base_dir + jitter).normalized()
+			
+		var too_close := false
+		for portal in source_portals:
+			if not is_instance_valid(portal):
+				continue
+			var portal_dir: Vector3 = (portal.global_position - source_room.global_position).normalized()
+			if candidate.dot(portal_dir) > min_dot:
+				too_close = true
+				break
+				
+		if too_close:
+			continue
+			
+		for portal in target_portals:
+			if not is_instance_valid(portal):
+				continue
+			var portal_dir: Vector3 = (portal.global_position - target_room.global_position).normalized()
+			if (-candidate).dot(portal_dir) > min_dot:
+				too_close = true
+				break
+				
+		if not too_close:
+			return candidate
+			
+	return base_dir
 
 ## Decorate all rooms with 3D model props on their interior surfaces
 func _decorate_rooms() -> void:

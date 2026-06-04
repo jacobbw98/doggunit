@@ -487,9 +487,9 @@ initial_w = 0.0
 | single rock.glb | 0.13 | 0.05–0.12 | rock |
 | small rock cluster.glb | 0.16 | 0.05–0.12 | rock |
 | big rock cluster.glb | 0.33 | 0.08–0.15 | rock |
-| House1.1.glb | 2.16 | 0.10–0.20 | structure |
-| house2.2.glb | ~2.0 | 0.10–0.20 | structure |
-| well.glb | 0.54 | 0.05–0.10 | structure |
+| House1.1.glb | 2.16 | 0.20–0.40 | structure |
+| house2.2.glb | ~2.0 | 0.20–0.40 | structure |
+| well.glb | 0.54 | 0.15–0.30 | structure |
 
 > **Note**: Most models have their AABB min_y ≈ 3.49, meaning geometry is offset ~3.5 units above the GLB root origin. This is a known complication for grounding logic.
 

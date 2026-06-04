@@ -50,9 +50,9 @@ func _build_model_catalog() -> void:
 		ModelEntry.new("res://resources/Models/single rock.glb", 0.05, 0.12, 5.0, ["rock", "nature"]),
 		ModelEntry.new("res://resources/Models/small rock cluster.glb", 0.05, 0.12, 3.0, ["rock", "nature"]),
 		ModelEntry.new("res://resources/Models/big rock cluster.glb", 0.08, 0.15, 2.0, ["rock", "nature"]),
-		ModelEntry.new("res://resources/Models/House1.1.glb", 0.1, 0.2, 1.5, ["structure"]),
-		ModelEntry.new("res://resources/Models/house2.2.glb", 0.1, 0.2, 1.5, ["structure"]),
-		ModelEntry.new("res://resources/Models/well.glb", 0.05, 0.1, 2.0, ["structure"]),
+		ModelEntry.new("res://resources/Models/House1.1.glb", 0.2, 0.4, 1.5, ["structure"]),
+		ModelEntry.new("res://resources/Models/house2.2.glb", 0.2, 0.4, 1.5, ["structure"]),
+		ModelEntry.new("res://resources/Models/well.glb", 0.15, 0.3, 2.0, ["structure"]),
 	]
 
 func _get_model_scene(path: String) -> PackedScene:

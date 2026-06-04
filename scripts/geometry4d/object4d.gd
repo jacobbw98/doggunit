@@ -42,6 +42,9 @@ func _ready() -> void:
 	_scale_4d = Vector4D.from_vector4(scale_4d)
 	add_to_group("objects_4d")
 	
+	# Sync initial 3D position now that we are in the tree
+	_sync_to_3d()
+	
 	# Auto-register with any Slicer4D in the scene
 	call_deferred("_register_with_slicer")
 	
@@ -108,7 +111,10 @@ func update_slice(slice_w: float) -> void:
 # Sync 4D position to 3D representation
 func _sync_to_3d() -> void:
 	# Project 4D position to 3D (XYZ components)
-	global_position = _position_4d.to_vector3()
+	if is_inside_tree():
+		global_position = _position_4d.to_vector3()
+	else:
+		position = _position_4d.to_vector3()
 	
 	# Update visibility based on W distance from current slice
 	_update_visibility()

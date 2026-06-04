@@ -35,14 +35,4 @@ auto_generate = true
 
 [node name="Player" parent="." instance=ExtResource("3_player")]
 
-[node name="InfoLabel" type="Label3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 5, -5)
-billboard = 2
-text = "Procedural Level
-Press ` for console
-- Use 'level [seed]' to generate new level
-- Use E near portals to open doors"
-font_size = 28
-outline_size = 4
-
 [node name="DebugConsole" parent="." instance=ExtResource("4_console")]

@@ -190,7 +190,7 @@ func _physics_process_3d(delta: float, direction: Vector3, speed: float, raw_inp
 		fly_velocity.z = direction.z * speed
 		if Input.is_action_pressed("jump"):
 			fly_velocity.y = speed
-		elif Input.is_action_pressed("crouch") or Input.is_key_pressed(KEY_CTRL):
+		elif (InputMap.has_action("crouch") and Input.is_action_pressed("crouch")) or Input.is_key_pressed(KEY_CTRL):
 			fly_velocity.y = -speed
 		velocity = fly_velocity
 		move_and_slide()
@@ -333,7 +333,7 @@ func _physics_process_3d(delta: float, direction: Vector3, speed: float, raw_inp
 			bhop_window_timer -= delta
 		
 		# Check for slide input (crouch while moving)
-		var crouch_pressed := Input.is_action_pressed("crouch") or Input.is_key_pressed(KEY_CTRL)
+		var crouch_pressed := (InputMap.has_action("crouch") and Input.is_action_pressed("crouch")) or Input.is_key_pressed(KEY_CTRL)
 		var has_movement := raw_input.length_squared() > 0.01
 		var horizontal_speed := horizontal_vel.length()
 		
@@ -456,7 +456,7 @@ func _physics_process_4d(delta: float, direction: Vector3, speed: float) -> void
 		fly_velocity.z = direction.z * speed
 		if Input.is_action_pressed("jump"):
 			fly_velocity.y = speed
-		elif Input.is_action_pressed("crouch") or Input.is_key_pressed(KEY_CTRL):
+		elif (InputMap.has_action("crouch") and Input.is_action_pressed("crouch")) or Input.is_key_pressed(KEY_CTRL):
 			fly_velocity.y = -speed
 		velocity = fly_velocity
 		move_and_slide()
