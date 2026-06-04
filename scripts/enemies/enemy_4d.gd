@@ -622,8 +622,15 @@ func _handle_room_sphere_interior(delta: float) -> bool:
 		if not room or not is_instance_valid(room):
 			continue
 		
-		var room_center: Vector3 = room.global_position
 		var room_radius: float = room.radius if room.get("radius") else 20.0
+		
+		# Check W-coordinate match - skip rooms on different W slices
+		if room.get("_position_4d") != null:
+			var room_w: float = room._position_4d.w
+			if abs(room_w - position_4d.w) > room_radius:
+				continue  # Skip this room - wrong W slice
+		
+		var room_center: Vector3 = room.global_position
 		var dist_to_center: float = global_position.distance_to(room_center)
 		
 		# Check if we're inside this sphere (with small margin)

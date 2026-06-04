@@ -110,6 +110,12 @@ func handle_colliders(pos: Vector4D, max_sin_up: float, clear_hits: bool = true)
 		if not surface or not is_instance_valid(surface):
 			continue
 		
+		# Only consider surfaces on a compatible W-slice
+		var surf_w: float = surface.position_4d.w
+		var surf_extent: float = surface.slice_threshold
+		if abs(surf_w - pos.w) > surf_extent:
+			continue  # Mismatched W slice
+		
 		# Check collision with surface
 		var dist := surface.get_signed_distance(pos)
 		if dist < collider_radius:
@@ -162,8 +168,15 @@ func update_sticky_gravity(position: Vector4D) -> void:
 	var closest_dist: float = INF
 	
 	for surface in surfaces:
-		if not surface:
+		if not surface or not is_instance_valid(surface):
 			continue
+		
+		# Only consider surfaces on a compatible W-slice
+		var surf_w: float = surface.position_4d.w
+		var surf_extent: float = surface.slice_threshold
+		if abs(surf_w - position.w) > surf_extent:
+			continue  # Mismatched W slice
+		
 		var dist: float = abs(surface.get_signed_distance(position))
 		if dist < closest_dist:
 			closest_dist = dist

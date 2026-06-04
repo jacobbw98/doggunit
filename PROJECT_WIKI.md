@@ -511,18 +511,11 @@ initial_w = 0.0
 3. Decoration spacing: minimum 3 units between any two decorations
 4. Scale: `room_radius * randf_range(min_scale, max_scale)`
 
-**Known Bug — Model Orientation**:
+**Orientation Bug (Resolved 2026-06-03)**:
 
-The wrapper Node3D sets `basis.y = toward_center`, which should make models stand upright from the sphere surface. However:
-- **Trees**: Sometimes appear correct, sometimes sideways
-- **Rocks/Well**: Consistently wrong orientation
-- **Root cause**: GLB models have inconsistent internal transforms in their scene hierarchy. Resetting the root node's transform to identity (`Transform3D.IDENTITY`) doesn't fix child node transforms.
-
-**To Debug Next**:
-1. Open each GLB in Godot editor → inspect the node tree and per-node transforms
-2. Determine each model's actual "up" axis
-3. Either add per-model rotation corrections to the catalog, or find a universal fix
-4. Consider using `look_at` on the wrapper instead of manual basis construction
+Previously, models (especially rocks and the well) spawned off-center, floated, or were oriented sideways.
+- **Root cause**: The `.glb` models had large internal translation offsets on their children (e.g. `T=[1.56, 3.53, -3.13]` in `oaktree.glb`). Applying rotation to the instance caused the visual meshes to orbit far away.
+- **Fix**: Implemented a recursive AABB visual bounds calculator `_calculate_local_aabb(instance)`. The model root position is shifted by `-center.x`, `-aabb.position.y`, `-center.z` relative to the wrapper. This grounds the bottom of the mesh at local Y = 0 and centers it horizontally at (0, 0), while Y-up points towards the room center.
 
 ---
 
@@ -557,4 +550,4 @@ All values adjustable in Inspector under **Movement Feel**:
 
 ---
 
-*Last updated: 2026-05-10*
+*Last updated: 2026-06-03*

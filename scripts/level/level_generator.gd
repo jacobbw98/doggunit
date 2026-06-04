@@ -97,8 +97,11 @@ func _process(_delta: float) -> void:
 	if not p:
 		return
 	
-	# Find which room the player is in
-	var player_room_id: int = _get_player_room_id(p.global_position)
+	# Find which room the player is in (using both 3D position and W coordinate)
+	var player_w: float = 0.0
+	if p.get("position_4d") != null:
+		player_w = p.position_4d.w
+	var player_room_id: int = _get_player_room_id(p.global_position, player_w)
 	
 	# Only update lights if player changed rooms
 	if player_room_id != current_lit_room_id:
@@ -106,12 +109,20 @@ func _process(_delta: float) -> void:
 		_update_room_w_sync(player_room_id)  # Sync W for host + adjacent rooms
 		current_lit_room_id = player_room_id
 
-## Get the room ID the player is currently in
-func _get_player_room_id(player_pos: Vector3) -> int:
+## Get the room ID the player is currently in (aware of W coordinate)
+func _get_player_room_id(player_pos: Vector3, player_w: float) -> int:
 	for i in range(rooms.size()):
 		var room = rooms[i]
 		if not is_instance_valid(room):
 			continue
+		
+		# Check W-coordinate match - skip rooms on different W slices
+		if room.get("_position_4d") != null:
+			var room_w: float = room._position_4d.w
+			var room_radius: float = room.radius if room.get("radius") else 20.0
+			if abs(room_w - player_w) > room_radius:
+				continue  # Skip this room - wrong W slice
+		
 		var room_center: Vector3 = room.global_position
 		var room_radius: float = room.radius if room.get("radius") else 20.0
 		var dist: float = player_pos.distance_to(room_center)

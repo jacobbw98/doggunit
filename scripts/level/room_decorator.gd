@@ -151,38 +151,82 @@ func _place_model(room: Node, model: ModelEntry, surface_pos: Vector3, room_cent
 	
 	var scale_val: float = room_radius * randf_range(model.min_scale, model.max_scale)
 	
+	# Calculate visual bounds of the instance to center and ground it
+	var aabb := _calculate_local_aabb(instance)
+	if aabb.size != Vector3.ZERO:
+		var center = aabb.get_center()
+		# Shift the model so its visual center is at X=0, Z=0 and its bottom (min Y) is at Y=0
+		instance.position = Vector3(-center.x, -aabb.position.y, -center.z)
+	
 	# Local position relative to room center (room is the parent node)
 	var local_pos: Vector3 = surface_pos - room.global_position
 	
-	# "Up" = from surface toward center = -local_pos direction
+	# "Up" direction for model orientation. Since the player is walking on the inside
+	# of the sphere, Y-up points inward toward the center (-local_pos.normalized()).
+	# This aligns the visual top of the model (positive Y) pointing toward the center
+	# and the visual base on the wall (ground).
 	var up: Vector3 = -local_pos.normalized()
 	
-	# Build orthonormal basis with Y = up (toward center)
+	# Pick a reference vector to construct a tangent basis
 	var ref: Vector3 = Vector3.FORWARD
 	if abs(up.dot(ref)) > 0.9:
 		ref = Vector3.RIGHT
-	var right: Vector3 = up.cross(ref).normalized()
-	var forward: Vector3 = right.cross(up).normalized()
 	
-	# Random spin around Y (toward-center axis)
+	# Project ref onto the tangent plane perpendicular to up
+	var tangent_forward: Vector3 = (ref - up * ref.dot(up)).normalized()
+	
+	# Apply random spin around the up axis (yaw)
 	var angle: float = randf() * TAU
-	var r: Vector3 = right * cos(angle) + forward * sin(angle)
-	var f: Vector3 = -right * sin(angle) + forward * cos(angle)
+	var forward: Vector3 = tangent_forward.rotated(up, angle).normalized()
 	
 	# Wrapper handles position + orientation + scale
 	var wrapper := Node3D.new()
 	wrapper.name = "Decor_%d" % (randi() % 99999)
 	wrapper.position = local_pos
-	wrapper.basis = Basis(r, up, -f)
+	
+	# Construct right-handed orthonormal basis:
+	# Y points along up, Z points along forward
+	wrapper.basis = Basis.looking_at(forward, up)
 	wrapper.scale = Vector3.ONE * scale_val
 	
-	# Model as child — reset its root transform so only wrapper controls orientation.
-	# Child meshes inside the GLB keep their own relative transforms.
-	instance.transform = Transform3D.IDENTITY
 	room.add_child(wrapper)
 	wrapper.add_child(instance)
 	
-	print("[RoomDecorator] Placed %s scale=%.1f" % [model.path.get_file(), scale_val])
+	print("[RoomDecorator] Placed %s scale=%.1f (aabb_min_y=%.2f, visual_offset=%s)" % [
+		model.path.get_file(), scale_val, aabb.position.y, instance.position
+	])
+
+func _calculate_local_aabb(node: Node, root: Node = null) -> AABB:
+	if root == null:
+		root = node
+	
+	var total_aabb := AABB()
+	var first := true
+	
+	# Queue-based recursive traversal to find all MeshInstance3Ds
+	var queue := [node]
+	while not queue.is_empty():
+		var current = queue.pop_back()
+		if current is MeshInstance3D and current.mesh:
+			var rel_transform := Transform3D.IDENTITY
+			var p = current
+			while p != root and p != null:
+				if p is Node3D:
+					rel_transform = p.transform * rel_transform
+				p = p.get_parent()
+			
+			var mesh_aabb = current.mesh.get_aabb()
+			var transformed_aabb = rel_transform * mesh_aabb
+			if first:
+				total_aabb = transformed_aabb
+				first = false
+			else:
+				total_aabb = total_aabb.merge(transformed_aabb)
+		
+		for child in current.get_children():
+			queue.append(child)
+			
+	return total_aabb
 
 func _filter_models(categories: Array) -> Array:
 	var result: Array = []
