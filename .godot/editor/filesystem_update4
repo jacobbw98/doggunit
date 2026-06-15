@@ -1,5 +1,0 @@
-res://scripts/level/level_generator.gd
-res://scenes/levels/procedural_level.tscn
-res://scripts/level/room_decorator.gd
-res://scripts/player/player_controller.gd
-res://scripts/geometry4d/object4d.gd
