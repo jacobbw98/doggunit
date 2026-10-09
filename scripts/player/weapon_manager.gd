@@ -46,9 +46,11 @@ func switch_to_weapon(index: int) -> void:
 	
 	if guns[index] == null:
 		return
+	if guns[index].get_meta("on_walkies", false):
+		return
 	
 	# Hide current gun
-	if current_gun_index >= 0 and guns[current_gun_index]:
+	if current_gun_index >= 0 and guns[current_gun_index] and not guns[current_gun_index].get_meta("on_walkies", false):
 		guns[current_gun_index].visible = false
 	
 	# Show new gun
@@ -65,7 +67,6 @@ func get_current_gun() -> Gun:
 func fire(origin: Vector3, direction: Vector3, w_position: float = 0.0) -> void:
 	var gun = get_current_gun()
 	if gun:
-		print("[WeaponManager] Firing gun at index %d" % current_gun_index)
 		gun.fire(origin, direction, w_position)
 	else:
 		print("[WeaponManager] Cannot fire - no gun equipped (index: %d)" % current_gun_index)
@@ -119,7 +120,7 @@ func _add_gun_to_slot(gun: Gun, slot: int) -> void:
 	
 	if gun_holder:
 		gun_holder.add_child(gun)
-		gun.position = Vector3.ZERO
+		gun.rebase_reload_animation(Transform3D.IDENTITY)
 		
 		# Hide if not current weapon
 		gun.visible = (slot == current_gun_index)

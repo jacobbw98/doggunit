@@ -1,0 +1,190 @@
+{
+  "doggunit_reload": {
+    "format": "unimate-samples/1",
+    "motions_dir": "motions",
+    "runs": [
+      {
+        "exp_dir": "outputs/unimate_uniml3d_f60_v3",
+        "checkpoint": "outputs/unimate_uniml3d_f60_v3\\checkpoints\\checkpoint_step_150000.pt",
+        "cfg_scale": 3.0,
+        "seed": 12031,
+        "mode": "text"
+      }
+    ],
+    "assets": {
+      "unitree_go2": {
+        "source": "assets\\examples\\unitree_go2",
+        "dataset": null,
+        "cond_path": "assets\\examples\\unitree_go2\\cond.npy",
+        "cond_key": "unitree_go2",
+        "canonical_glb": "assets\\examples\\unitree_go2\\unitree_go2.glb",
+        "stats_dataset": "general",
+        "joint_names": [
+          "base",
+          "FR_hip",
+          "RL_hip",
+          "FL_hip",
+          "RR_hip",
+          "Head_upper",
+          "FR_thigh",
+          "RL_thigh",
+          "FL_thigh",
+          "RR_thigh",
+          "FR_calf",
+          "RL_calf",
+          "FL_calf",
+          "RR_calf",
+          "FR_foot",
+          "RL_foot",
+          "FL_foot",
+          "RR_foot"
+        ],
+        "frame_digest": "84769ebee3aabe1a9837cd67f6887eff5f12eeba"
+      }
+    },
+    "samples": {
+      "unitree_go2-an_object_lowers_its_head_to_eat_then_lifts_its-rep_0-0.npy": {
+        "asset": "unitree_go2",
+        "case_id": "unitree_go2-an_object_lowers_its_head_to_eat_then_lifts_its",
+        "prompt": "An object lowers its head to eat, then lifts its head.",
+        "kind": "sample",
+        "run": 0,
+        "frame_digest": "84769ebee3aabe1a9837cd67f6887eff5f12eeba"
+      },
+      "unitree_go2-an_object_lowers_its_head_to_eat_then_lifts_its-rep_1-0.npy": {
+        "asset": "unitree_go2",
+        "case_id": "unitree_go2-an_object_lowers_its_head_to_eat_then_lifts_its",
+        "prompt": "An object lowers its head to eat, then lifts its head.",
+        "kind": "sample",
+        "run": 0,
+        "frame_digest": "84769ebee3aabe1a9837cd67f6887eff5f12eeba"
+      },
+      "unitree_go2-an_object_lowers_its_head_to_eat_then_lifts_its-rep_2-0.npy": {
+        "asset": "unitree_go2",
+        "case_id": "unitree_go2-an_object_lowers_its_head_to_eat_then_lifts_its",
+        "prompt": "An object lowers its head to eat, then lifts its head.",
+        "kind": "sample",
+        "run": 0,
+        "frame_digest": "84769ebee3aabe1a9837cd67f6887eff5f12eeba"
+      }
+    }
+  },
+  "doggunit_reload_bow": {
+    "format": "unimate-samples/1",
+    "motions_dir": "motions",
+    "runs": [
+      {
+        "exp_dir": "outputs/unimate_uniml3d_f60_v3",
+        "checkpoint": "outputs/unimate_uniml3d_f60_v3\\checkpoints\\checkpoint_step_150000.pt",
+        "cfg_scale": 5.0,
+        "seed": 16421,
+        "mode": "text"
+      }
+    ],
+    "assets": {
+      "unitree_go2": {
+        "source": "assets\\examples\\unitree_go2",
+        "dataset": null,
+        "cond_path": "assets\\examples\\unitree_go2\\cond.npy",
+        "cond_key": "unitree_go2",
+        "canonical_glb": "assets\\examples\\unitree_go2\\unitree_go2.glb",
+        "stats_dataset": "general",
+        "joint_names": [
+          "base",
+          "FR_hip",
+          "RL_hip",
+          "FL_hip",
+          "RR_hip",
+          "Head_upper",
+          "FR_thigh",
+          "RL_thigh",
+          "FL_thigh",
+          "RR_thigh",
+          "FR_calf",
+          "RL_calf",
+          "FL_calf",
+          "RR_calf",
+          "FR_foot",
+          "RL_foot",
+          "FL_foot",
+          "RR_foot"
+        ],
+        "frame_digest": "84769ebee3aabe1a9837cd67f6887eff5f12eeba"
+      }
+    },
+    "samples": {
+      "unitree_go2-an_object_bows_forward-rep_0-0.npy": {
+        "asset": "unitree_go2",
+        "case_id": "unitree_go2-an_object_bows_forward",
+        "prompt": "An object bows forward.",
+        "kind": "sample",
+        "run": 0,
+        "frame_digest": "84769ebee3aabe1a9837cd67f6887eff5f12eeba"
+      },
+      "unitree_go2-an_object_crouches_down_with_its_head_lowered-rep_0-0.npy": {
+        "asset": "unitree_go2",
+        "case_id": "unitree_go2-an_object_crouches_down_with_its_head_lowered",
+        "prompt": "An object crouches down with its head lowered.",
+        "kind": "sample",
+        "run": 0,
+        "frame_digest": "84769ebee3aabe1a9837cd67f6887eff5f12eeba"
+      },
+      "unitree_go2-an_object_bends_down_to_eat-rep_0-0.npy": {
+        "asset": "unitree_go2",
+        "case_id": "unitree_go2-an_object_bends_down_to_eat",
+        "prompt": "An object bends down to eat.",
+        "kind": "sample",
+        "run": 0,
+        "frame_digest": "84769ebee3aabe1a9837cd67f6887eff5f12eeba"
+      },
+      "unitree_go2-an_object_bows_forward-rep_1-0.npy": {
+        "asset": "unitree_go2",
+        "case_id": "unitree_go2-an_object_bows_forward",
+        "prompt": "An object bows forward.",
+        "kind": "sample",
+        "run": 0,
+        "frame_digest": "84769ebee3aabe1a9837cd67f6887eff5f12eeba"
+      },
+      "unitree_go2-an_object_crouches_down_with_its_head_lowered-rep_1-0.npy": {
+        "asset": "unitree_go2",
+        "case_id": "unitree_go2-an_object_crouches_down_with_its_head_lowered",
+        "prompt": "An object crouches down with its head lowered.",
+        "kind": "sample",
+        "run": 0,
+        "frame_digest": "84769ebee3aabe1a9837cd67f6887eff5f12eeba"
+      },
+      "unitree_go2-an_object_bends_down_to_eat-rep_1-0.npy": {
+        "asset": "unitree_go2",
+        "case_id": "unitree_go2-an_object_bends_down_to_eat",
+        "prompt": "An object bends down to eat.",
+        "kind": "sample",
+        "run": 0,
+        "frame_digest": "84769ebee3aabe1a9837cd67f6887eff5f12eeba"
+      },
+      "unitree_go2-an_object_bows_forward-rep_2-0.npy": {
+        "asset": "unitree_go2",
+        "case_id": "unitree_go2-an_object_bows_forward",
+        "prompt": "An object bows forward.",
+        "kind": "sample",
+        "run": 0,
+        "frame_digest": "84769ebee3aabe1a9837cd67f6887eff5f12eeba"
+      },
+      "unitree_go2-an_object_crouches_down_with_its_head_lowered-rep_2-0.npy": {
+        "asset": "unitree_go2",
+        "case_id": "unitree_go2-an_object_crouches_down_with_its_head_lowered",
+        "prompt": "An object crouches down with its head lowered.",
+        "kind": "sample",
+        "run": 0,
+        "frame_digest": "84769ebee3aabe1a9837cd67f6887eff5f12eeba"
+      },
+      "unitree_go2-an_object_bends_down_to_eat-rep_2-0.npy": {
+        "asset": "unitree_go2",
+        "case_id": "unitree_go2-an_object_bends_down_to_eat",
+        "prompt": "An object bends down to eat.",
+        "kind": "sample",
+        "run": 0,
+        "frame_digest": "84769ebee3aabe1a9837cd67f6887eff5f12eeba"
+      }
+    }
+  }
+}

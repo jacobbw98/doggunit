@@ -7,8 +7,7 @@ signal player_died()
 signal position_4d_changed(pos: Vector4D)
 
 @export_group("Movement")
-@export var walk_speed: float = 5.0
-@export var sprint_speed: float = 8.0
+@export var walk_speed: float = 8.0
 @export var jump_velocity: float = 9.0
 @export var mouse_sensitivity: float = 0.003
 @export var slide_speed: float = 12.0
@@ -68,11 +67,18 @@ const BHOP_WINDOW: float = 0.15  # 150ms window for bhop
 
 # Status effects (from explosions, freezing, implosion pulls)
 var frozen_timer: float = 0.0
+var freezing_hit_count: int = 0
+var freezing_hit_window: float = 0.0
+var size_multiplier: float = 1.0
+var _base_capsule: CapsuleShape3D
+var _base_camera_position: Vector3
 var external_velocity: Vector3 = Vector3.ZERO
-const EXTERNAL_VELOCITY_DECAY: float = 5.0
 
 func _ready() -> void:
+	_base_capsule = $CollisionShape3D.shape.duplicate() as CapsuleShape3D
+	_base_camera_position = camera.position
 	current_health = max_health
+	position_4d = Vector4D.from_vector3(global_position, initial_w)
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	add_to_group("player")
 	
@@ -83,12 +89,15 @@ func _ready() -> void:
 func _init_4d_mode() -> void:
 	# Create surface walker for 4D physics
 	surface_walker = SurfaceWalker4D.new()
+	# The CharacterBody controller owns movement. A second physics integrator
+	# would overwrite its XYZ position whenever debug W scrolling is enabled.
+	surface_walker.auto_process = false
 	surface_walker.move_speed = walk_speed
 	surface_walker.jump_velocity = jump_velocity
 	add_child(surface_walker)
 	
 	# Set initial 4D position (XYZ from 3D position, W from setting)
-	position_4d = Vector4D.from_vector3(global_position, initial_w)
+	position_4d = Vector4D.from_vector3(global_position, position_4d.w)
 	surface_walker.set_position(position_4d)
 	
 	# Connect signals
@@ -133,37 +142,28 @@ func _unhandled_input(event: InputEvent) -> void:
 			_sync_4d_position()
 
 func _physics_process(delta: float) -> void:
-	# DEBUG - print once per second to confirm this is running
-	if Engine.get_frames_drawn() % 60 == 0:
-		print("[Player] _physics_process running, fly_mode=%s" % fly_mode)
-	
-	# Handle frozen state - skip movement controls but still apply physics
-	if frozen_timer > 0:
-		frozen_timer -= delta
-		# Still apply external velocity while frozen
-		if external_velocity.length_squared() > 0.01:
-			velocity = external_velocity
-			external_velocity = external_velocity.lerp(Vector3.ZERO, EXTERNAL_VELOCITY_DECAY * delta)
-			move_and_slide()
-		return
-	
-	# Decay and apply external velocity (knockback, implosion pull)
-	if external_velocity.length_squared() > 0.01:
-		velocity += external_velocity
-		external_velocity = external_velocity.lerp(Vector3.ZERO, EXTERNAL_VELOCITY_DECAY * delta)
-	
+	freezing_hit_window -= delta
+	if freezing_hit_window < -0.000001:
+		freezing_hit_count = 0
+		freezing_hit_window = 0.0
+	# Freeze disables input, while gravity, collision and knockback keep running.
+	var controls_enabled := frozen_timer <= 0.0
 	# Continuous fire while holding shoot button
-	if Input.is_action_pressed("shoot"):
+	if controls_enabled and Input.is_action_pressed("shoot"):
 		_fire_weapon()
 	
-	var input_dir = Input.get_vector("move_left", "move_right", "move_forward", "move_backward")
+	var input_dir := Input.get_vector("move_left", "move_right", "move_forward", "move_backward") if controls_enabled else Vector2.ZERO
 	var direction = (transform.basis * Vector3(input_dir.x, 0, input_dir.y)).normalized()
-	var speed = sprint_speed if Input.is_action_pressed("sprint") else walk_speed
+	var speed := walk_speed
 	
 	# Pass both world direction AND raw input for sphere walking
 	_physics_process_3d(delta, direction, speed, Vector3(input_dir.x, 0, input_dir.y))
+	frozen_timer = maxf(0.0, frozen_timer - delta)
+	position_4d = Vector4D.from_vector3(global_position, position_4d.w)
+	position_4d_changed.emit(position_4d)
 
 func _physics_process_3d(delta: float, direction: Vector3, speed: float, raw_input: Vector3 = Vector3.ZERO) -> void:
+	var controls_enabled := frozen_timer <= 0.0
 	if fly_mode:
 		# Fly mode - simple free movement with standard Y-up orientation
 		# Gradually lerp orientation to world up (prevents jarring snap)
@@ -172,7 +172,7 @@ func _physics_process_3d(delta: float, direction: Vector3, speed: float, raw_inp
 			# Smoothly rotate toward world up
 			var target_basis := Basis()
 			target_basis.y = Vector3.UP
-			target_basis.z = -global_transform.basis.z
+			target_basis.z = global_transform.basis.z
 			target_basis.z.y = 0
 			if target_basis.z.length_squared() < 0.01:
 				target_basis.z = Vector3.BACK
@@ -188,11 +188,13 @@ func _physics_process_3d(delta: float, direction: Vector3, speed: float, raw_inp
 		var fly_velocity := Vector3.ZERO
 		fly_velocity.x = direction.x * speed
 		fly_velocity.z = direction.z * speed
-		if Input.is_action_pressed("jump"):
+		if controls_enabled and Input.is_action_pressed("jump"):
 			fly_velocity.y = speed
-		elif (InputMap.has_action("crouch") and Input.is_action_pressed("crouch")) or Input.is_key_pressed(KEY_CTRL):
+		elif controls_enabled and ((InputMap.has_action("crouch") and Input.is_action_pressed("crouch")) or Input.is_key_pressed(KEY_CTRL)):
 			fly_velocity.y = -speed
-		velocity = fly_velocity
+		if controls_enabled:
+			velocity = fly_velocity
+		_consume_external_impulse()
 		move_and_slide()
 		
 		# Reset gravity up for when we exit fly mode
@@ -207,15 +209,14 @@ func _physics_process_3d(delta: float, direction: Vector3, speed: float, raw_inp
 	var room_radius := 20.0
 	var best_inside_dist: float = -INF  # Most inside = highest value
 	
-	# DEBUG: Count rooms in group
 	var rooms_in_group: Array = get_tree().get_nodes_in_group("room_spheres_4d")
-	if Engine.get_frames_drawn() % 120 == 0:
-		print("[Player] Checking %d rooms in 'room_spheres_4d' group, player pos=%s" % [rooms_in_group.size(), global_position])
 	
 	# Find the room we're MOST INSIDE of (highest score = best match)
 	# IMPORTANT: Only consider rooms at matching W coordinate to prevent
 	# interaction with overlapping rooms at different W slices
 	for room in rooms_in_group:
+		if room.get("graph_visible") == false:
+			continue
 		if room.has_method("get_spawn_position"):
 			var r_center: Vector3 = room.global_position
 			var r_radius: float = room.radius if room.get("radius") else 20.0
@@ -241,13 +242,6 @@ func _physics_process_3d(delta: float, direction: Vector3, speed: float, raw_inp
 					room_center = r_center
 					room_radius = r_radius
 	
-	# DEBUG: Show result of room search
-	if Engine.get_frames_drawn() % 120 == 0:
-		if current_room:
-			print("[Player] Found room: %s (inside_dist=%.1f)" % [current_room.name, best_inside_dist])
-		else:
-			print("[Player] NO ROOM FOUND! Falling into space...")
-	
 	if current_room:
 		# DYNAMIC GRAVITY: Pull player toward the sphere wall (outward from center)
 		var dir_from_center := (global_position - room_center)
@@ -266,7 +260,7 @@ func _physics_process_3d(delta: float, direction: Vector3, speed: float, raw_inp
 		var dist_to_wall := room_radius - global_position.distance_to(room_center)
 		
 		# Use a grounded threshold that works with our clamp buffer
-		var grounded_threshold := 3.0  # Matches clamp buffer + some margin
+		var grounded_threshold := 3.0 * size_multiplier
 		var is_grounded := dist_to_wall < grounded_threshold
 		
 		# Check if player is in a portal hole (for physics exemptions)
@@ -289,7 +283,7 @@ func _physics_process_3d(delta: float, direction: Vector3, speed: float, raw_inp
 		
 		# Clamp player to stay inside sphere (portal holes in mesh will allow traversal)
 		# Skip clamping if aligned with a portal hole (allows natural walk-through)
-		var max_dist := room_radius - 2.0
+		var max_dist := room_radius - 2.0 * size_multiplier
 		var current_dist := global_position.distance_to(room_center)
 		
 		if current_dist > max_dist:
@@ -299,15 +293,9 @@ func _physics_process_3d(delta: float, direction: Vector3, speed: float, raw_inp
 		
 		# CONSTRUCT PLAYER ORIENTATION from facing vector + gravity up
 		
-		# Smoothly interpolate the gravity up direction
-		var old_up := current_gravity_up
-		current_gravity_up = current_gravity_up.lerp(surface_up, 8.0 * delta).normalized()
-		
-		# When gravity up changes, re-project facing onto new tangent plane
-		sphere_facing = sphere_facing - current_gravity_up * sphere_facing.dot(current_gravity_up)
-		if sphere_facing.length_squared() < 0.001:
-			sphere_facing = Vector3.FORWARD - current_gravity_up * Vector3.FORWARD.dot(current_gravity_up)
-		sphere_facing = sphere_facing.normalized()
+		# Transport facing with gravity, including the 180-degree change between
+		# touching spheres. Linear interpolation of opposite normals gets stuck.
+		_align_to_gravity(surface_up, delta)
 		
 		# Construct orthonormal basis from facing + up
 		# In Godot: -Z is forward, Y is up, X is right
@@ -333,7 +321,7 @@ func _physics_process_3d(delta: float, direction: Vector3, speed: float, raw_inp
 			bhop_window_timer -= delta
 		
 		# Check for slide input (crouch while moving)
-		var crouch_pressed := (InputMap.has_action("crouch") and Input.is_action_pressed("crouch")) or Input.is_key_pressed(KEY_CTRL)
+		var crouch_pressed := controls_enabled and ((InputMap.has_action("crouch") and Input.is_action_pressed("crouch")) or Input.is_key_pressed(KEY_CTRL))
 		var has_movement := raw_input.length_squared() > 0.01
 		var horizontal_speed := horizontal_vel.length()
 		
@@ -351,7 +339,7 @@ func _physics_process_3d(delta: float, direction: Vector3, speed: float, raw_inp
 		# Movement logic
 		if is_sliding:
 			# Sliding: maintain direction with friction
-			current_momentum *= slide_friction
+			current_momentum *= pow(slide_friction, delta * 60.0)
 			horizontal_vel = slide_direction * current_momentum
 		elif raw_input.length_squared() > 0.01:
 			# Normal movement with acceleration (snappy feel)
@@ -373,7 +361,8 @@ func _physics_process_3d(delta: float, direction: Vector3, speed: float, raw_inp
 				pass
 			else:
 				# Snappy deceleration when standing
-				horizontal_vel = horizontal_vel.move_toward(Vector3.ZERO, deceleration * delta)
+				var brake := deceleration if is_grounded else air_deceleration
+				horizontal_vel = horizontal_vel.move_toward(Vector3.ZERO, brake * delta)
 				
 				# Snap to zero below threshold for crisp stops
 				if horizontal_vel.length() < stop_threshold:
@@ -385,7 +374,7 @@ func _physics_process_3d(delta: float, direction: Vector3, speed: float, raw_inp
 		velocity = horizontal_vel + vertical_vel
 		
 		# Jump toward center (away from wall) - only when grounded
-		if Input.is_action_just_pressed("jump") and is_grounded:
+		if controls_enabled and Input.is_action_just_pressed("jump") and is_grounded:
 			velocity += surface_up * jump_velocity
 			
 			# Bunny hop bonus: if jumping within bhop window, boost momentum (UNCAPPED!)
@@ -400,6 +389,8 @@ func _physics_process_3d(delta: float, direction: Vector3, speed: float, raw_inp
 		var nearest_radius: float = 20.0
 		
 		for room in get_tree().get_nodes_in_group("room_spheres_4d"):
+			if room.get("graph_visible") == false:
+				continue
 			if room.has_method("get_spawn_position"):
 				var r_center: Vector3 = room.global_position
 				var r_radius: float = room.radius if room.get("radius") else 20.0
@@ -418,7 +409,7 @@ func _physics_process_3d(delta: float, direction: Vector3, speed: float, raw_inp
 			dir_from_center = dir_from_center.normalized()
 			
 			# Clamp to inside the sphere with buffer
-			var max_dist := nearest_radius - 2.0
+			var max_dist := nearest_radius - 2.0 * size_multiplier
 			if nearest_dist > max_dist or nearest_dist < 1.0:
 				# Teleport to safe position inside the room
 				global_position = nearest_center + dir_from_center * max_dist
@@ -430,23 +421,60 @@ func _physics_process_3d(delta: float, direction: Vector3, speed: float, raw_inp
 			velocity += grav_dir * gravity * gravity_multiplier * delta
 			
 			# Update orientation
-			current_gravity_up = current_gravity_up.lerp(-dir_from_center, 8.0 * delta).normalized()
+			_align_to_gravity(-dir_from_center, delta)
 		else:
 			# No rooms at all - standard Y-down gravity
 			if not is_on_floor():
 				velocity.y -= gravity * delta
 			
-			if Input.is_action_just_pressed("jump") and is_on_floor():
+			if controls_enabled and Input.is_action_just_pressed("jump") and is_on_floor():
 				velocity.y = jump_velocity
 			
 			if direction.length_squared() > 0.01:
 				velocity.x = direction.x * speed
 				velocity.z = direction.z * speed
 			else:
-				velocity.x = move_toward(velocity.x, 0, speed)
-				velocity.z = move_toward(velocity.z, 0, speed)
+				var brake := deceleration if is_on_floor() else air_deceleration
+				velocity.x = move_toward(velocity.x, 0, brake * delta)
+				velocity.z = move_toward(velocity.z, 0, brake * delta)
 	
+	_consume_external_impulse()
+	# Portals contribute a velocity change, never an additional move_and_slide.
+	var requested_movement := global_transform.basis * raw_input
+	for portal in get_tree().get_nodes_in_group("portal_doors"):
+		if portal.has_method("get_traversal_assist"):
+			var assistance: Vector3 = portal.get_traversal_assist(self, delta, speed, requested_movement)
+			if not assistance.is_zero_approx():
+				velocity += assistance
+				break
 	move_and_slide()
+
+func _consume_external_impulse() -> void:
+	# Impulses are added once, then the existing movement/gravity handles them.
+	# Re-adding a decaying impulse every tick multiplied knockback by the frame rate.
+	velocity += external_velocity
+	external_velocity = Vector3.ZERO
+
+func _align_to_gravity(surface_up: Vector3, delta: float) -> void:
+	var old_up := current_gravity_up.normalized()
+	var next_up := surface_up.normalized()
+	var angle := acos(clampf(old_up.dot(next_up), -1.0, 1.0))
+	if angle > 0.0001:
+		var axis := old_up.cross(next_up)
+		if old_up.dot(next_up) < -0.5 or axis.length_squared() < 0.0001:
+			# Keep the facing axis through an antipodal crossing instead of
+			# collapsing the basis or arbitrarily turning the camera around.
+			axis = sphere_facing.slide(old_up)
+			if axis.length_squared() < 0.0001:
+				axis = old_up.cross(Vector3.RIGHT if absf(old_up.x) < 0.9 else Vector3.FORWARD)
+		var turn := Basis(axis.normalized(), angle * (1.0 - exp(-8.0 * delta)))
+		current_gravity_up = (turn * old_up).normalized()
+		sphere_facing = turn * sphere_facing
+	else:
+		current_gravity_up = next_up
+	sphere_facing = sphere_facing.slide(current_gravity_up).normalized()
+	if sphere_facing.length_squared() < 0.001:
+		sphere_facing = current_gravity_up.cross(Vector3.RIGHT if absf(current_gravity_up.x) < 0.9 else Vector3.FORWARD).normalized()
 
 func _physics_process_4d(delta: float, direction: Vector3, speed: float) -> void:
 	# Handle FLY MODE (noclip) - same as 3D mode
@@ -532,6 +560,8 @@ func _fire_weapon() -> void:
 		weapon_manager.fire(origin, direction, w_pos)
 
 func take_damage(amount: int, damage_type: GunTypes.Type = GunTypes.Type.EXPLOSIVE) -> void:
+	if current_health <= 0 or get_meta("god_mode", false):
+		return
 	current_health -= amount
 	current_health = max(current_health, 0)
 	
@@ -547,7 +577,6 @@ func heal(amount: int) -> void:
 
 func _die() -> void:
 	player_died.emit()
-	print("Player died!")
 
 func get_camera_direction() -> Vector3:
 	return -camera.global_transform.basis.z
@@ -590,7 +619,9 @@ func set_fly_mode(enabled: bool) -> void:
 
 ## Check if player is near a portal in the given room (allows passage through sphere boundary)
 func _is_near_portal(room: Node) -> bool:
-	if not room or not room.has_method("get_portals"):
+	if not is_instance_valid(room):
+		return false
+	if not room.has_method("get_portals"):
 		# Try to find portals as children
 		for child in room.get_children():
 			if child.is_in_group("portal_doors"):
@@ -617,39 +648,40 @@ func freeze(duration: float) -> void:
 	frozen_timer = max(frozen_timer, duration)
 	print("[Player] FROZEN for %.1f seconds!" % duration)
 
+func register_freezing_hit(roll: float = -1.0) -> bool:
+	if freezing_hit_window < -0.000001:
+		freezing_hit_count = 0
+	freezing_hit_count += 1
+	freezing_hit_window = 0.5
+	var chance := minf(1.0, freezing_hit_count * 0.01)
+	if freezing_hit_count >= 100 or (randf() if roll < 0.0 else roll) < chance:
+		freeze(2.0)
+		return true
+	return false
+
+func set_size_multiplier(factor: float) -> void:
+	size_multiplier = factor
+	if _base_capsule:
+		var shape := $CollisionShape3D.shape as CapsuleShape3D
+		if shape == _base_capsule or not $CollisionShape3D.has_meta("sized_for_run"):
+			shape = _base_capsule.duplicate() as CapsuleShape3D
+			$CollisionShape3D.shape = shape
+			$CollisionShape3D.set_meta("sized_for_run", true)
+		shape.radius = _base_capsule.radius * factor
+		shape.height = _base_capsule.height * factor
+	camera.position = _base_camera_position * factor
+
 ## Apply an external force to the player (explosion knockback, implosion pull)
 func apply_external_force(force: Vector3) -> void:
 	external_velocity += force
 	print("[Player] External force applied: %s" % str(force))
 
-## Check if player is in any portal's hole (either in transition zone OR standing on portal)
-## This makes portals act like holes you fall through, not surfaces you stand on
+## Only openings in this room can exempt the player from its spherical boundary.
 func _is_in_portal_hole(pos: Vector3, room: Node) -> bool:
-	# Check all portal doors
-	var all_portals = get_tree().get_nodes_in_group("portal_doors")
-	for portal in all_portals:
-		if not is_instance_valid(portal):
-			continue
-		
-		# Method 1: Check if player is in the transition zone (Area3D detection)
-		# This is the most reliable - if Area3D says we're in, we're in
-		if portal.get("_players_in_zone") != null:
-			var players_in_zone: Array = portal._players_in_zone
-			if self in players_in_zone:
+	if not is_instance_valid(room) or not room.has_method("get_portals"):
+		return false
+	for portal in room.get_portals():
+		if is_instance_valid(portal) and portal.has_method("contains_aperture"):
+			if portal.contains_player_aperture(pos, self):
 				return true
-		
-		# Method 2: Check if player is NEAR the portal's position (within hole radius)
-		# This catches cases where player is standing ON the portal before entering the box
-		# Use a tighter radius (2.0x) to prevent premature floor clipping
-		# The transition Area3D is portal_radius * 2.5 wide, so 2.0x is safe
-		var portal_radius = portal.get("portal_radius")
-		if portal_radius == null:
-			portal_radius = 2.0  # Default portal radius
-		
-		var dist_to_portal: float = pos.distance_to(portal.global_position)
-		# Use 2.0x portal radius - tight enough to prevent floor clipping,
-		# but large enough to allow walking into the hole
-		if dist_to_portal < portal_radius * 2.0:
-			return true
-			
 	return false

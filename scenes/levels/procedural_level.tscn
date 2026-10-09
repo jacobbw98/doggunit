@@ -1,9 +1,11 @@
-[gd_scene load_steps=6 format=3 uid="uid://chvrfskdsv7tv"]
+[gd_scene load_steps=8 format=3 uid="uid://chvrfskdsv7tv"]
 
 [ext_resource type="Script" uid="uid://c4cla1fs2hdyx" path="res://scripts/level/level_generator.gd" id="1_levelgen"]
 [ext_resource type="Script" uid="uid://cqunptvpf2jay" path="res://scripts/rendering4d/slicer4d.gd" id="2_slicer"]
 [ext_resource type="PackedScene" uid="uid://player001" path="res://scenes/player/player.tscn" id="3_player"]
 [ext_resource type="PackedScene" uid="uid://dp77v14v7xbrc" path="res://scenes/ui/debug_console.tscn" id="4_console"]
+[ext_resource type="Script" path="res://scripts/game/run_manager.gd" id="5_run"]
+[ext_resource type="Script" path="res://scripts/game/run_ui.gd" id="6_ui"]
 
 [sub_resource type="Environment" id="Environment_1"]
 background_mode = 1
@@ -31,8 +33,14 @@ scroll_speed = 2.0
 
 [node name="LevelGenerator" type="Node" parent="."]
 script = ExtResource("1_levelgen")
-auto_generate = true
+auto_generate = false
 
 [node name="Player" parent="." instance=ExtResource("3_player")]
 
 [node name="DebugConsole" parent="." instance=ExtResource("4_console")]
+
+[node name="RunManager" type="Node" parent="."]
+script = ExtResource("5_run")
+
+[node name="RunUI" type="CanvasLayer" parent="."]
+script = ExtResource("6_ui")

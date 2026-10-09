@@ -1,4 +1,26 @@
-<svg height="128" width="128" xmlns="http://www.w3.org/2000/svg">
-  <rect width="128" height="128" fill="#3d5a80"/>
-  <text x="64" y="75" font-family="Arial" font-size="40" font-weight="bold" text-anchor="middle" fill="#ee6c4d">D!</text>
+<svg width="256" height="256" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
+  <title>Mappo — Doggun'it mascot</title>
+  <rect width="256" height="256" rx="52" fill="#0c1823"/>
+  <circle cx="128" cy="132" r="100" fill="#17313d" stroke="#407e76" stroke-width="3"/>
+  <!-- Mappo's upright ears and broad, dark face. -->
+  <path d="M57 112 35 27 58 19 103 82 153 82 198 19 221 27 199 112 200 161 176 209 128 231 80 209 56 161Z" fill="#171e27"/>
+  <path d="m51 38 16 66 21-22Z" fill="#675451"/>
+  <path d="m205 38-16 66-21-22Z" fill="#675451"/>
+  <path d="m57 112 46-30 25-7v83l-46 34-26-31Z" fill="#29323c"/>
+  <path d="m128 75 25 7 46 30 1 49-26 31-46-34Z" fill="#202933"/>
+  <path d="m69 115 34-11 11 13-38 9Zm118 0-34-11-11 13 38 9Z" fill="#14191e"/>
+  <path d="m75 128 13-6 15 3-4 14-16 1Zm106 0-13-6-15 3 4 14 16 1Z" fill="#c58c42"/>
+  <ellipse cx="90" cy="131" rx="5" ry="7" fill="#131719"/>
+  <ellipse cx="166" cy="131" rx="5" ry="7" fill="#131719"/>
+  <circle cx="87" cy="127" r="2.5" fill="#f5efda"/>
+  <circle cx="163" cy="127" r="2.5" fill="#f5efda"/>
+  <path d="m94 168 34-8 34 8 10 23-18 27h-52l-18-27Z" fill="#11161d"/>
+  <path d="m102 172 26 6 26-6 1 32-12 13h-30l-12-13Z" fill="#c68191"/>
+  <path d="m126 183 13 6-2 19-12 8-9-13Zm20-5 7 1-1 15-7-3Z" fill="#534e61"/>
+  <path d="m86 145 26-9 16 11 16-11 26 9 9 26-19 14-32-10-32 10-19-14Z" fill="#20252b"/>
+  <path d="m86 145 26-9 16 11v28l-32 10-19-14Z" fill="#272c32"/>
+  <path d="m106 143 22-6 22 6-5 17-17 8-17-8Z" fill="#10171d"/>
+  <path d="m111 144 17-4 15 4-18 3Z" fill="#37404a"/>
+  <path d="m79 211 25 9h48l25-9-5 15-30 12h-28l-30-12Z" fill="#79b7a0"/>
+  <path d="M128 229c-12-13-25 4 0 20 25-16 12-33 0-20Z" fill="#4badd6"/>
 </svg>

@@ -1,5 +1,5 @@
 # RoomDecorator - Places 3D model decorations on the interior surface of sphere rooms
-# Uses a dead-simple approach: place model, look_at center, rotate so Y=up toward center.
+# Imported model transforms are preserved inside a separately grounded pivot.
 class_name RoomDecorator
 extends RefCounted
 
@@ -14,6 +14,7 @@ class ModelEntry:
 
 var model_catalog: Array = []
 var _scene_cache: Dictionary = {}
+var _rng := RandomNumberGenerator.new()
 
 const ROOM_NORMAL := 0
 const ROOM_BOSS := 1
@@ -21,6 +22,7 @@ const ROOM_ITEM := 2
 const ROOM_SHOP := 3
 const ROOM_GAMBLING := 4
 const ROOM_SPECIAL := 5
+const ROOM_SECRET := 6
 
 var decoration_profiles: Dictionary = {
 	ROOM_NORMAL: { "density": 1.0, "categories": ["tree", "rock", "structure"], "structure_chance": 0.15 },
@@ -29,16 +31,21 @@ var decoration_profiles: Dictionary = {
 	ROOM_SHOP: { "density": 0.6, "categories": ["structure", "rock"], "structure_chance": 0.9 },
 	ROOM_GAMBLING: { "density": 0.4, "categories": ["rock"], "structure_chance": 0.3 },
 	ROOM_SPECIAL: { "density": 2.0, "categories": ["tree", "rock"], "structure_chance": 0.05 },
+	ROOM_SECRET: { "density": 0.6, "categories": ["tree", "rock"], "structure_chance": 0.5 },
 }
 
 const MIN_DECORATION_SPACING: float = 3.0
 const MIN_PORTAL_DISTANCE: float = 6.0
 
 ## How far inside the wall to place model origins (units from wall toward center)
-const WALL_INSET: float = 1.0
+const WALL_INSET: float = 0.15
 
 func _init() -> void:
 	_build_model_catalog()
+	_rng.randomize()
+
+func set_seed(value: int) -> void:
+	_rng.seed = value
 
 func _build_model_catalog() -> void:
 	# Scale = target visual height in game units (auto-calculated from room radius later)
@@ -72,6 +79,8 @@ func decorate_room(room: Node, room_type: int, portal_positions: Array) -> void:
 	var profile: Dictionary = decoration_profiles.get(room_type, decoration_profiles[ROOM_NORMAL])
 	var density: float = profile["density"]
 	var allowed_categories: Array = profile["categories"]
+	if room_type == ROOM_NORMAL and room.get("biome") == 1:
+		allowed_categories = ["rock"]
 	var structure_chance: float = profile["structure_chance"]
 	
 	var total_count: int = clampi(int(ceil(floor(room_radius / 5.0) * density)), 1, 25)
@@ -100,7 +109,7 @@ func decorate_room(room: Node, room_type: int, portal_positions: Array) -> void:
 	
 	# Maybe place a structure
 	var placed_count: int = 0
-	if structure_models.size() > 0 and randf() < structure_chance:
+	if structure_models.size() > 0 and _rng.randf() < structure_chance:
 		var pos = _find_surface_point(room_center, room_radius, portal_dirs, placed, 20)
 		if pos != Vector3.ZERO:
 			_place_model(room, _weighted_pick(structure_models), pos, room_center, room_radius)
@@ -116,11 +125,17 @@ func decorate_room(room: Node, room_type: int, portal_positions: Array) -> void:
 		_place_model(room, _weighted_pick(models_to_use), pos, room_center, room_radius)
 		placed.append(pos)
 	
+	var grass := Node3D.new()
+	grass.name = "ForestGrass"
+	grass.set_script(load("res://scripts/level/forest_grass.gd"))
+	room.add_child(grass)
+	# Separate seed keeps decoration and gameplay RNG unchanged.
+	grass.populate(room, int(room.room_id) * 7919 + int(_rng.seed))
 	print("[RoomDecorator] %s: %d models placed (type=%d)" % [room.name, placed.size(), room_type])
 
 func _find_surface_point(center: Vector3, radius: float, portal_dirs: Array, placed: Array, attempts: int) -> Vector3:
 	for _i in range(attempts):
-		var dir := Vector3(randf_range(-1,1), randf_range(-1,1), randf_range(-1,1)).normalized()
+		var dir := Vector3(_rng.randf_range(-1,1), _rng.randf_range(-1,1), _rng.randf_range(-1,1)).normalized()
 		var pt: Vector3 = center + dir * (radius - WALL_INSET)
 		
 		var blocked := false
@@ -149,23 +164,29 @@ func _place_model(room: Node, model: ModelEntry, surface_pos: Vector3, room_cent
 	if not instance:
 		return
 	
-	var scale_val: float = room_radius * randf_range(model.min_scale, model.max_scale)
-	
-	# Calculate visual bounds of the instance to center and ground it
-	var aabb := _calculate_local_aabb(instance)
-	if aabb.size != Vector3.ZERO:
-		var center = aabb.get_center()
-		# Shift the model so its visual center is at X=0, Z=0 and its bottom (min Y) is at Y=0
-		instance.position = Vector3(-center.x, -aabb.position.y, -center.z)
+	# A GLB root can carry rotation, nonuniform scale and an arbitrary export
+	# offset. Include that root in the measured bounds and offset a new pivot,
+	# never replace the imported root's position in a different coordinate space.
+	var normalized := Node3D.new()
+	normalized.name = "GroundedModel"
+	normalized.add_child(instance)
+	var aabb := _calculate_local_aabb(normalized)
+	var center := aabb.get_center()
+	normalized.position = Vector3(-center.x, -aabb.position.y, -center.z)
+	var reference_size: float = maxf(aabb.size.y, 0.001)
+	if "rock" in model.categories:
+		reference_size = maxf(aabb.size.x, maxf(aabb.size.y, aabb.size.z))
+	var scale_val: float = room_radius * _rng.randf_range(model.min_scale, model.max_scale) / maxf(reference_size, 0.001)
 	
 	# Local position relative to room center (room is the parent node)
-	var local_pos: Vector3 = surface_pos - room.global_position
+	var local_pos: Vector3 = room.to_local(surface_pos)
 	
 	# "Up" direction for model orientation. Since the player is walking on the inside
 	# of the sphere, Y-up points inward toward the center (-local_pos.normalized()).
 	# This aligns the visual top of the model (positive Y) pointing toward the center
 	# and the visual base on the wall (ground).
-	var up: Vector3 = -local_pos.normalized()
+	var up: Vector3 = room.to_local(room_center) - local_pos
+	up = up.normalized()
 	
 	# Pick a reference vector to construct a tangent basis
 	var ref: Vector3 = Vector3.FORWARD
@@ -176,12 +197,13 @@ func _place_model(room: Node, model: ModelEntry, surface_pos: Vector3, room_cent
 	var tangent_forward: Vector3 = (ref - up * ref.dot(up)).normalized()
 	
 	# Apply random spin around the up axis (yaw)
-	var angle: float = randf() * TAU
+	var angle: float = _rng.randf() * TAU
 	var forward: Vector3 = tangent_forward.rotated(up, angle).normalized()
 	
 	# Wrapper handles position + orientation + scale
 	var wrapper := Node3D.new()
-	wrapper.name = "Decor_%d" % (randi() % 99999)
+	wrapper.name = "Decor_%d" % (_rng.randi() % 99999)
+	wrapper.set_meta("model_path", model.path)
 	wrapper.position = local_pos
 	
 	# Construct right-handed orthonormal basis:
@@ -190,11 +212,7 @@ func _place_model(room: Node, model: ModelEntry, surface_pos: Vector3, room_cent
 	wrapper.scale = Vector3.ONE * scale_val
 	
 	room.add_child(wrapper)
-	wrapper.add_child(instance)
-	
-	print("[RoomDecorator] Placed %s scale=%.1f (aabb_min_y=%.2f, visual_offset=%s)" % [
-		model.path.get_file(), scale_val, aabb.position.y, instance.position
-	])
+	wrapper.add_child(normalized)
 
 func _calculate_local_aabb(node: Node, root: Node = null) -> AABB:
 	if root == null:
@@ -243,7 +261,7 @@ func _weighted_pick(models: Array) -> ModelEntry:
 	var total: float = 0.0
 	for m in models:
 		total += m.weight
-	var roll: float = randf() * total
+	var roll: float = _rng.randf() * total
 	var cum: float = 0.0
 	for m in models:
 		cum += m.weight

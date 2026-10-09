@@ -1,0 +1,85 @@
+{
+  "subject": "Mappo",
+  "status": "Reauthored in Blender via the running localhost:9876 MCP extension; rendered and imported into Godot",
+  "job_id": "20260930-062701-e1628b79",
+  "reference_image": "mappo-cartoon-reference.png",
+  "reference_tool": "Built-in image_gen tool",
+  "reference_inputs": [
+    "20250321_131803.jpg",
+    "20260512_162250.jpg",
+    "20250321_131812.jpg"
+  ],
+  "final_reference_prompt": "Edit this reference of Mappo for a LOW POLYGON Katamari Damacy style game model. Keep the adult stocky black dog identity, upright pointy ears, amber eyes, mint collar and blue heart tag, pink tongue with dark spots, tan brindle lower legs. IMPORTANT correction: his entire face and entire snout/muzzle are BLACK, no white, no gray fur or pale patches anywhere on his face, cheeks, chin or around the mouth. Nose also black. Use simple chunky angular polygon shapes, a boxy head and broad blocky BLACK muzzle, stout block legs, simple wedge ears and angular black tail. Flat-shaded very low-poly PS2-era Katamari aesthetic, approximately 1500 triangles, simple flat painted colors, no fur texture, no realistic skin or normal maps, no smooth Pixar sculpt. Body and HEAD point straight forward along the SAME longitudinal axis: head NOT turned sideways or looking toward camera. Standing neutral symmetrical quadruped pose. Show a three-quarter side view so complete body, forward aligned muzzle and all four legs are readable. Light gray background, full dog with margin, simple even lighting, no props, no text. Keep snout entirely dark black.",
+  "pipeline": "https://github.com/zorrobyte/asset-studio",
+  "stages": [
+    "Reference image input",
+    "Pixal3D",
+    "Blender optimization",
+    "Validation and packaging"
+  ],
+  "settings": {
+    "seed": 20260931,
+    "quality": "balanced",
+    "pixal3d_resolution": 1024,
+    "low_vram": true,
+    "height_m": 1.46,
+    "target_triangles": 1800,
+    "texture_size": 1024,
+    "rembg": "ZhengPeng7/BiRefNet"
+  },
+  "asset": {
+    "path": "../mappo.glb",
+    "triangles": 2130,
+    "vertices": 4704,
+    "bytes": 178328,
+    "sha256": "8776ac5cf90ba980f06d02527990955435a45266150f96f5c6fb069a390918c9",
+    "rigged": false,
+    "animated": true
+  },
+  "hardware": {
+    "gpu": "RTX 4090",
+    "ram_gb": 128,
+    "torch": "2.11+cu128"
+  },
+  "runtime": "Two meshes with matte flat-color materials: static body and hinged lower jaw. Blender +Y forward exports as Godot -Z, source and adapter height 1.46 m, paws grounded at zero. Embedded Mappo_Shoot node animation opens/closes jaw over 0.32 seconds in Godot; GeneratedMascot.bark() restarts it on each successful shot. Existing idle breathing and weapon recoil remain compatible. No skeletal rig.",
+  "note": "Original private photos are not copied into the repository. Qwen/FLUX skipped. Raw pipeline output is preserved in asset-studio-master/outputs/mappo-lowpoly/generated. At this low budget the pipeline used a voxel proxy; unused LODs exceeded their target budgets. Main model has 1619 triangles.",
+  "user_corrections": "Approved head/body orientation preserved. Legs now black with white toe patches: white surface area reduced by 89.9%. Original reference image is generation history and predates mesh/material corrections.",
+  "previous_asset": {
+    "path": "../mappo.glb",
+    "triangles": 1619,
+    "vertices": 4855,
+    "bytes": 947312,
+    "sha256": "325D2363BB221F006D4147FA68F890160936D86786A4A1DBAD42A9073F18FEF5",
+    "rigged": false
+  },
+  "style_revision": {
+    "source": "mappo-katamari.blend",
+    "authoring_script": "style_mappo.py",
+    "backup": "mappo-pre-katamari.glb",
+    "preview": "mappo-katamari-preview.png",
+    "references": [
+      "20250321_131803.jpg",
+      "20250321_131812.jpg",
+      "20260805_190013.jpg",
+      "codex-clipboard-f965c495-f22a-4838-92ac-e78fa05529f9.jpg"
+    ],
+    "changes": "Clean flat-color toy geometry; elongated torso and tapered broad snout; large pointed ears; higher amber-brown eyes; side overbite, visible front incisors and closed-mouth hidden canines; three straight black whiskers on each side; dark central tongue patch; mint collar and blue heart tag; mostly black legs and tiny pale toe markings. Original private photos remain outside the repository.",
+    "head_revision": "Nearly cubic skull (0.64:0.64:0.60), smaller single-facet bevels, closer eye spacing, raised ear roots; overall source height normalized to 1.46 m.",
+    "snout_revision": "Longer pyramid muzzle: widened cheek base at y=.62 (half-width .185, half-height .17) to small square nose cap at y=1.085, with four flat sides.",
+    "face_revision": "Eyes raised .035 in authoring units. Recessed and narrower lower jaw creates a side overbite. Four fixed upper front incisors show when closed; inward upper canines are physically covered by the closed jaw and revealed by opening. Tongue and lower teeth remain tucked inside when closed.",
+    "whisker_revision": "Three thin, straight tapered black polygon whiskers on each side of the upper muzzle, attached to the static body mesh. RGB is exactly zero and specular reflection is disabled in Blender and the Godot matte adapter.",
+    "ear_revision": "Reference photo 20250321_131812.jpg: 55% taller and 30% wider ears, now with single sharp apexes and pointed triangular inner panels.",
+    "mouth_animation": {
+      "name": "Mappo_Shoot",
+      "duration_seconds": 0.28,
+      "hinge": "Mappo_JawPivot",
+      "keys": "closed at 0.00s, open -29 degrees at 0.08s, hold through 0.16s, closed at 0.28s",
+      "trigger": "GeneratedMascot.bark() from Gun.fire()",
+      "preview": "mappo-shoot-preview.gif",
+      "rig_type": "Node transform animation; lower jaw, tongue and lower teeth move together; upper teeth stay on head.",
+      "godot_imported_duration_seconds": 0.32
+    },
+    "tail_revision": "Centerline shortened 15% about its fixed body attachment. Nearly even thickness through five rings; final triangle fan meets one apex for a pointed tip.",
+    "leg_revision": "Side-photo reference 20250321_131803.jpg: tapered front legs, fuller rear thighs, forward knees and rearward hocks, smaller flatter paws with three toe shapes, restrained dark brindle facets and tiny pale toe details."
+  }
+}

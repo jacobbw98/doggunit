@@ -63,6 +63,10 @@ func _input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 
 func toggle_console() -> void:
+	# A reward/end screen owns pause until it is resolved. Do not let closing
+	# the console resume gameplay behind that screen.
+	if not is_open and get_tree().paused:
+		return
 	is_open = !is_open
 	
 	if console_container:
@@ -72,6 +76,7 @@ func toggle_console() -> void:
 		print("[DebugConsole] ERROR: No console_container!")
 	
 	if is_open:
+		GameManager.pause_game()
 		if input_field:
 			input_field.grab_focus()
 			input_field.clear()
@@ -79,6 +84,7 @@ func toggle_console() -> void:
 		get_tree().paused = true
 		print("[DebugConsole] Console OPENED")
 	else:
+		GameManager.resume_game()
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 		get_tree().paused = false
 		print("[DebugConsole] Console CLOSED")
@@ -246,6 +252,9 @@ func _cmd_spawn_enemy(_args: Array) -> void:
 
 func _cmd_god() -> void:
 	god_mode = !god_mode
+	var player = get_tree().get_first_node_in_group("player")
+	if player:
+		player.set_meta("god_mode", god_mode)
 	_print_line("[color=green]God mode: %s[/color]" % ("ON" if god_mode else "OFF"))
 
 func _cmd_heal() -> void:

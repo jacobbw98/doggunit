@@ -1,0 +1,19 @@
+{
+  "source": "data/items.csv",
+  "assets": [
+    "biscuit",
+    "zoomies",
+    "squeaker",
+    "cone",
+    "flagellum",
+    "flagella",
+    "kibble",
+    "tag",
+    "howl_horn",
+    "med_bowl",
+    "magnet",
+    "leash"
+  ],
+  "style": "Original low-poly cartoon models",
+  "authoring_script": "catalog_models.py"
+}

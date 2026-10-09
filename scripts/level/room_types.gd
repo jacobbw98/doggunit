@@ -9,7 +9,8 @@ enum Type {
 	ITEM,       # Free item reward
 	SHOP,       # Buy items with currency
 	GAMBLING,   # Risk/reward mechanics
-	SPECIAL     # Unique encounter
+	SPECIAL,    # Unique encounter
+	SECRET      # Hidden W-layer reward, revealed by sniffing near its doorway
 }
 
 ## Room colors by type
@@ -19,7 +20,8 @@ const ROOM_COLORS: Dictionary = {
 	Type.ITEM: Color(1.0, 0.85, 0.2, 1.0),    # Gold
 	Type.SHOP: Color(1.0, 0.6, 0.2, 1.0),     # Orange
 	Type.GAMBLING: Color(0.6, 0.2, 1.0, 1.0), # Purple
-	Type.SPECIAL: Color(0.2, 0.4, 1.0, 1.0)   # Blue
+	Type.SPECIAL: Color(0.2, 0.4, 1.0, 1.0),  # Blue
+	Type.SECRET: Color(0.25, 1.0, 0.65, 1.0)  # Mint
 }
 
 ## Room size multipliers
@@ -29,7 +31,8 @@ const ROOM_SIZES: Dictionary = {
 	Type.ITEM: 1.0,
 	Type.SHOP: 1.0,
 	Type.GAMBLING: 1.0,
-	Type.SPECIAL: 1.0
+	Type.SPECIAL: 1.0,
+	Type.SECRET: 0.8
 }
 
 ## Room display names
@@ -39,7 +42,8 @@ const ROOM_NAMES: Dictionary = {
 	Type.ITEM: "Item Room",
 	Type.SHOP: "Shop",
 	Type.GAMBLING: "Gambling Room",
-	Type.SPECIAL: "??? Room"
+	Type.SPECIAL: "??? Room",
+	Type.SECRET: "Hidden Kennel"
 }
 
 ## Get color for room type

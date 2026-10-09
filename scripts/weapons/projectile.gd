@@ -23,6 +23,32 @@ var shooter: Node = null
 ## Time to live before auto-destroy
 var lifetime: float = 5.0
 var _time_alive: float = 0.0
+var _impact_handled: bool = false
+var _pending_world_origin := Vector3.ZERO
+var _has_pending_world_origin: bool = false
+## Item modifiers are set by the gun before launch and inherited by split shots.
+var bounce_count: int = 0
+var homing_strength: float = 0.0
+var laser_guided: bool = false
+## Broad stat upgrades scale force/radius separately from pre-scaled damage/speed.
+var power_multiplier: float = 1.0
+var _launched: bool = false
+var _source_room: Node3D
+var _source_room_id: int = -1
+var _recent_hit_bodies: Array[Node3D] = []
+var _impact_target: Node3D
+const LASER_RANGE: float = 250.0
+const IMPACT_CLEARANCE: float = 0.25
+
+## Detached impact effects keep the shot's W slice after the projectile is freed.
+class SliceEffect extends Node3D:
+	var impact_w: float = 0.0
+	var owning_room: Node3D
+	func _process(_delta: float) -> void:
+		visible = not is_instance_valid(owning_room) or owning_room.get("graph_visible") != false
+		var player := get_tree().get_first_node_in_group("player")
+		if player and player.has_method("get_position_4d"):
+			visible = visible and absf(player.get_position_4d().w - impact_w) < 5.0
 
 ## Visual components
 var mesh_instance: MeshInstance3D
@@ -50,6 +76,9 @@ const IMPLOSION_FORCE: float = 15.0
 const SPLIT_ANGLE: float = 0.4  # Radians (~23 degrees)
 
 func _ready() -> void:
+	if _has_pending_world_origin:
+		global_position = _pending_world_origin
+		_has_pending_world_origin = false
 	_create_visual()
 	_setup_collision()
 	add_to_group("projectiles")
@@ -104,7 +133,7 @@ func _create_visual() -> void:
 	var size: float = 0.15
 	if gun_stats:
 		size = 0.1 + gun_stats.projectile_size * 0.1
-	_base_scale = size / 0.15  # Store base scale for 4D scaling
+	_base_scale = 1.0  # The mesh already contains projectile_size; do not scale it twice.
 	sphere.radius = size
 	sphere.height = size * 2
 	mesh_instance.mesh = sphere
@@ -143,143 +172,359 @@ func _setup_collision() -> void:
 	# Enable monitorable so portals can detect us
 	monitorable = true
 
+## Launch after parenting: factories retain a pending world muzzle origin.
+func launch(launch_direction: Vector3) -> void:
+	if _launched or _impact_handled:
+		return
+	direction = launch_direction.normalized() if not launch_direction.is_zero_approx() else Vector3.FORWARD
+	_launched = true
+	_capture_source_room()
+	if laser_guided:
+		_update_homing(1.0)
+		_fire_laser()
+
+func _capture_source_room(prefer_shooter: bool = true) -> void:
+	if is_instance_valid(_source_room):
+		return
+	var desired_id := int(shooter.get_meta("encounter_room", -1)) if prefer_shooter and is_instance_valid(shooter) else -1
+	if prefer_shooter and desired_id < 0 and is_instance_valid(shooter) and shooter.is_in_group("player"):
+		var run := get_tree().get_first_node_in_group("run_manager")
+		if run:
+			desired_id = int(run.get("current_room_id"))
+	var nearest_ratio := INF
+	for room in get_tree().get_nodes_in_group("room_spheres_4d"):
+		if not room is Node3D or not is_instance_valid(room):
+			continue
+		if room.get("_position_4d") != null and absf(room._position_4d.w - position_4d.w) > 0.5:
+			continue
+		if desired_id >= 0:
+			if room.get("room_id") == desired_id:
+				_source_room = room
+				break
+			continue
+		var radius: float = float(room.get("radius"))
+		var ratio: float = global_position.distance_to(room.global_position) / maxf(radius, 0.01)
+		if ratio <= 1.05 and ratio < nearest_ratio:
+			_source_room = room
+			nearest_ratio = ratio
+	if is_instance_valid(_source_room) and _source_room.get("room_id") != null:
+		_source_room_id = int(_source_room.get("room_id"))
+
+## The portal plane changes the shot's W/room ownership without moving XYZ.
+## Native Area3D portal callbacks delegate here too; a stale callback from an
+## already-crossed source cannot overwrite a later destination.
+func notify_portal_crossing(portal: Node3D) -> void:
+	if _impact_handled or not is_instance_valid(portal) or portal.get("available") == false or portal.get("combat_locked") == true or portal.get("key_locked") == true:
+		return
+	if is_instance_valid(_source_room) and portal.get("source_room") != _source_room:
+		return
+	var receiver := portal.get("target_portal") as Node3D
+	var destination := receiver.get("source_room") as Node3D if is_instance_valid(receiver) else null
+	if not is_instance_valid(destination):
+		return
+	_source_room = destination
+	_source_room_id = int(destination.get("room_id")) if destination.get("room_id") != null else -1
+	var point = destination.get("position_4d")
+	if point == null:
+		point = destination.get("_position_4d")
+	position_4d = Vector4D.from_vector3(global_position, float(point.w) if point != null else position_4d.w)
+
 func _physics_process(delta: float) -> void:
-	# Move forward in 3D
-	var movement: Vector3 = direction * speed * delta
-	global_position += movement
-	
-	# Update 4D position (W stays same unless velocity_w is set)
+	if _impact_handled or get_tree().paused:
+		return
+	if not _launched:
+		launch(direction)
+		if _impact_handled:
+			return
+	_clear_departed_hits()
+	_update_homing(delta)
+	var remaining := speed * delta
+	# Resolve several impacts in one high-speed tick without tunnelling.
+	while remaining > 0.0001 and not _impact_handled:
+		var start := global_position
+		var finish := start + direction * remaining
+		var hit := _trace_segment(start, finish)
+		if hit.is_empty():
+			global_position = finish
+			break
+		global_position = hit.position
+		remaining = maxf(0.0, remaining - start.distance_to(global_position))
+		position_4d = Vector4D.from_vector3(global_position, position_4d.w)
+		if hit.has("portal"):
+			notify_portal_crossing(hit.portal)
+			continue
+		_resolve_collision(hit.get("collider") as Node3D, hit.normal)
 	position_4d = Vector4D.from_vector3(global_position, position_4d.w + velocity_w * delta)
-	
-	# Raycast ahead to detect walls (backup for body_entered)
-	_check_wall_collision(movement.length())
-	
-	# Track lifetime
 	_time_alive += delta
 	if _time_alive >= lifetime:
 		queue_free()
 
-## Check for wall collision - uses both raycast (for regular walls) and distance-based detection (for room spheres)
-func _check_wall_collision(distance_moved: float) -> void:
-	# Method 1: Check distance to room sphere walls (room spheres have no physics collision)
-	for room in get_tree().get_nodes_in_group("room_spheres_4d"):
-		if not room or not is_instance_valid(room):
+func _update_homing(delta: float) -> void:
+	if homing_strength <= 0.0:
+		return
+	var nearest: Node3D
+	var nearest_distance := INF
+	for candidate in get_tree().get_nodes_in_group("enemies"):
+		if not candidate is Node3D or not is_instance_valid(candidate) or candidate == shooter or candidate.get("_dead") == true:
 			continue
-		
-		var room_radius: float = room.radius if room.get("radius") else 20.0
-		
-		# Check W-coordinate match - skip rooms on different W slices
-		if room.get("_position_4d") != null:
-			var room_w: float = room._position_4d.w
-			if abs(room_w - position_4d.w) > room_radius:
-				continue  # Skip this room - wrong W slice
-		
-		var room_center: Vector3 = room.global_position
-		var dist_to_center: float = global_position.distance_to(room_center)
-		
-		# First check: Are we actually inside this room sphere?
-		# (inside = dist_to_center < room_radius)
-		if dist_to_center >= room_radius:
-			continue  # Not inside this room, skip it
-		
-		# We're inside this room - check if we're close to the wall
-		var dist_to_wall: float = room_radius - dist_to_center
-		if dist_to_wall < 1.5:  # Within 1.5 units of the wall
-			print("[Projectile] Room sphere wall hit! (dist_to_wall=%.2f)" % dist_to_wall)
-			_handle_wall_collision()
-			return
-	
-	# Method 2: Raycast for regular physics walls (floors, ceilings, static bodies)
-	var space_state: PhysicsDirectSpaceState3D = get_world_3d().direct_space_state
-	if space_state:
-		var ray_length: float = max(distance_moved * 2.0, 0.5)
-		var query: PhysicsRayQueryParameters3D = PhysicsRayQueryParameters3D.create(
-			global_position - direction * 0.2,
-			global_position + direction * ray_length
-		)
-		query.collision_mask = 1  # World layer
-		query.exclude = []
-		
-		var result: Dictionary = space_state.intersect_ray(query)
-		if result and result.position.distance_to(global_position) < 0.5:
-			print("[Projectile] Physics wall hit detected!")
-			_handle_wall_collision()
+		if not _target_matches_w(candidate) or not _target_matches_room(candidate) or _body_is_blocked(candidate):
+			continue
+		var distance := global_position.distance_squared_to(candidate.global_position)
+		if distance < nearest_distance:
+			nearest = candidate
+			nearest_distance = distance
+	if is_instance_valid(nearest):
+		var toward := (_body_center(nearest) - global_position).normalized()
+		direction = direction.lerp(toward, 1.0 - exp(-homing_strength * delta)).normalized()
 
-## Handle wall collision based on projectile type
-func _handle_wall_collision() -> void:
-	match damage_type:
-		GunTypes.Type.EXPLOSIVE:
-			_explode()
-			queue_free()
-		GunTypes.Type.FREEZING:
-			_freeze_nearby()
-			queue_free()
-		GunTypes.Type.IMPLOSIVE:
-			_implode_nearby()
-			queue_free()
-		GunTypes.Type.ACCELERATING:
-			queue_free()  # Accelerating just stops on walls
+func _clear_departed_hits() -> void:
+	for index in range(_recent_hit_bodies.size() - 1, -1, -1):
+		var body := _recent_hit_bodies[index]
+		if not is_instance_valid(body) or global_position.distance_to(_body_center(body)) > _body_clearance(body):
+			_recent_hit_bodies.remove_at(index)
 
+func _body_center(body: Node3D) -> Vector3:
+	var shape := body.get_node_or_null("CollisionShape3D") as CollisionShape3D
+	return shape.global_position if shape else body.global_position
 
+func _body_clearance(body: Node3D) -> float:
+	var radius := 0.5
+	var shape := body.get_node_or_null("CollisionShape3D") as CollisionShape3D
+	if shape and shape.shape:
+		if shape.shape is CapsuleShape3D:
+			radius = maxf(float(shape.shape.radius), float(shape.shape.height) * 0.5)
+		elif shape.shape is SphereShape3D:
+			radius = float(shape.shape.radius)
+	return radius + 0.4
 
+func _body_is_blocked(body: Node3D) -> bool:
+	return body in _recent_hit_bodies or (damage_type == GunTypes.Type.ACCELERATING and body in hit_bodies)
 
+## Physics and analytic room walls share the same closest-hit calculation.
+func _trace_segment(start: Vector3, finish: Vector3) -> Dictionary:
+	var closest := _trace_sphere_wall(start, finish)
+	var crossing := _trace_portal_plane(start, finish)
+	if not crossing.is_empty() and (closest.is_empty() or start.distance_squared_to(crossing.position) < start.distance_squared_to(closest.position)):
+		closest = crossing
+	var query := PhysicsRayQueryParameters3D.create(start, finish, collision_mask)
+	var exclusions: Array[RID] = []
+	if is_instance_valid(shooter) and shooter is CollisionObject3D:
+		exclusions.append(shooter.get_rid())
+	for body in _recent_hit_bodies:
+		if is_instance_valid(body) and body is CollisionObject3D:
+			exclusions.append(body.get_rid())
+	if damage_type == GunTypes.Type.ACCELERATING:
+		for body in hit_bodies:
+			if is_instance_valid(body) and body is CollisionObject3D:
+				exclusions.append(body.get_rid())
+	for attempt in range(32):
+		query.exclude = exclusions
+		var hit: Dictionary = get_world_3d().direct_space_state.intersect_ray(query)
+		if hit.is_empty():
+			break
+		var body := hit.collider as Node3D
+		if body and body.has_method("take_damage") and (not _target_matches_w(body) or not _target_matches_room(body)):
+			exclusions.append(hit.rid)
+			continue
+		if closest.is_empty() or start.distance_squared_to(hit.position) < start.distance_squared_to(closest.position):
+			closest = hit
+		break
+	return closest
+
+func _trace_portal_plane(start: Vector3, finish: Vector3) -> Dictionary:
+	var nearest: Dictionary = {}
+	var portals: Array = _source_room.get_portals() if is_instance_valid(_source_room) and _source_room.has_method("get_portals") else get_tree().get_nodes_in_group("portal_doors")
+	for candidate in portals:
+		var portal := candidate as Node3D
+		if not is_instance_valid(portal) or not portal.has_method("contains_aperture"):
+			continue
+		if is_instance_valid(_source_room) and portal.get("source_room") != _source_room:
+			continue
+		var receiver := portal.get("target_portal") as Node3D
+		if not is_instance_valid(receiver) or not is_instance_valid(receiver.get("source_room")):
+			continue
+		var entry := portal.to_local(start)
+		var exit := portal.to_local(finish)
+		if entry.z <= 0.000001 or exit.z > 0.0:
+			continue
+		var fraction := entry.z / (entry.z - exit.z)
+		var point := start.lerp(finish, fraction)
+		if not portal.contains_aperture(point, 2.0):
+			continue
+		if nearest.is_empty() or start.distance_squared_to(point) < start.distance_squared_to(nearest.position):
+			nearest = {"position": point, "normal": Vector3.ZERO, "collider": null, "portal": portal}
+	return nearest
+
+func _trace_sphere_wall(start: Vector3, finish: Vector3) -> Dictionary:
+	var nearest: Dictionary = {}
+	for room in get_tree().get_nodes_in_group("room_spheres_4d"):
+		if not is_instance_valid(room):
+			continue
+		if is_instance_valid(_source_room) and room != _source_room:
+			continue
+		if room.get("_position_4d") != null and absf(room._position_4d.w - position_4d.w) > 0.5:
+			continue
+		var radius: float = float(room.get("radius")) if room.get("radius") != null else 20.0
+		var relative_start: Vector3 = start - room.global_position
+		var movement := finish - start
+		var relative_end: Vector3 = finish - room.global_position
+		if relative_start.length() > radius or relative_end.length() < radius - 0.15 or movement.dot(relative_end) <= 0.0:
+			continue
+		var a := movement.length_squared()
+		var b := 2.0 * relative_start.dot(movement)
+		var c := relative_start.length_squared() - pow(radius - 0.15, 2)
+		var discriminant := b * b - 4.0 * a * c
+		if a <= 0.00001 or discriminant < 0.0:
+			continue
+		var fraction := (-b + sqrt(discriminant)) / (2.0 * a)
+		if fraction < 0.0 or fraction > 1.0:
+			continue
+		var point := start.lerp(finish, fraction)
+		var through_portal := false
+		if room.has_method("get_portals"):
+			for portal in room.get_portals():
+				if is_instance_valid(portal) and portal.has_method("contains_aperture") and portal.contains_aperture(point, 2.0):
+					through_portal = true
+					break
+		if through_portal:
+			continue
+		if nearest.is_empty() or start.distance_squared_to(point) < start.distance_squared_to(nearest.position):
+			nearest = {"position": point, "normal": -(point - room.global_position).normalized(), "collider": null}
+	return nearest
+
+## Compatibility helpers for callers that explicitly sweep or check a wall.
+func _check_swept_collision(previous_position: Vector3) -> void:
+	var hit := _trace_segment(previous_position, global_position)
+	if not hit.is_empty():
+		global_position = hit.position
+		position_4d = Vector4D.from_vector3(global_position, position_4d.w)
+		if hit.has("portal"):
+			notify_portal_crossing(hit.portal)
+		else:
+			_resolve_collision(hit.get("collider") as Node3D, hit.normal)
+
+func _check_wall_collision(distance_moved: float) -> void:
+	var hit := _trace_sphere_wall(global_position - direction * distance_moved, global_position)
+	if not hit.is_empty():
+		global_position = hit.position
+		position_4d = Vector4D.from_vector3(global_position, position_4d.w)
+		_handle_wall_collision(hit.normal)
+
+func _target_matches_w(body: Node) -> bool:
+	var target_w := 0.0
+	if body.has_method("get_position_4d"):
+		target_w = body.get_position_4d().w
+	elif "position_4d" in body:
+		target_w = body.position_4d.w
+	return absf(position_4d.w - target_w) <= PROJECTILE_W_RADIUS
+
+func _target_matches_room(body: Node3D) -> bool:
+	if _source_room_id < 0:
+		return true
+	var owner_id := int(body.get_meta("encounter_room", body.get_meta("room_id", -1)))
+	if body.is_in_group("player"):
+		var run := get_tree().get_first_node_in_group("run_manager")
+		if run:
+			owner_id = int(run.get("current_room_id"))
+	if owner_id >= 0:
+		return owner_id == _source_room_id
+	return not is_instance_valid(_source_room) or body.global_position.distance_to(_source_room.global_position) <= float(_source_room.get("radius"))
 
 func _on_body_entered(body: Node3D) -> void:
-	# Don't hit shooter
-	if body == shooter:
+	_resolve_collision(body, Vector3.ZERO)
+
+func _handle_wall_collision(normal: Vector3 = Vector3.ZERO) -> void:
+	_resolve_collision(null, normal)
+
+func _resolve_collision(body: Node3D, normal: Vector3) -> void:
+	if _impact_handled or (is_instance_valid(body) and (body == shooter or _body_is_blocked(body))):
 		return
-	
-	# Don't hit already-hit bodies (for piercing projectiles)
-	if body in hit_bodies:
+	var direct_target := is_instance_valid(body) and body.has_method("take_damage")
+	if direct_target and (not _target_matches_w(body) or not _target_matches_room(body)):
 		return
-	
-	# Check if this is an enemy (has take_damage method)
-	var is_enemy: bool = body.has_method("take_damage")
-	
-	# For enemies, do 4D hit check - verify W-distance
-	if is_enemy:
-		var target_w: float = 0.0
-		if body.has_method("get_position_4d"):
-			var target_4d: Vector4D = body.get_position_4d()
-			target_w = target_4d.w
-		elif "position_4d" in body:
-			target_w = body.position_4d.w
-		
-		var w_distance: float = abs(position_4d.w - target_w)
-		if w_distance > PROJECTILE_W_RADIUS:
-			# Miss - target is in different W-slice
-			print("[Projectile] Near miss - target is %.1f W-units away" % w_distance)
-			return
-		
-		# Mark this body as hit
-		hit_bodies.append(body)
-		
-		# Apply damage to the direct hit target
+	_impact_target = body if direct_target else null
+	if direct_target:
+		_recent_hit_bodies.append(body)
+		if body not in hit_bodies:
+			hit_bodies.append(body)
+		if damage_type == GunTypes.Type.FREEZING:
+			if body.has_method("register_freezing_hit"):
+				body.register_freezing_hit()
+			elif body.has_method("freeze") and randf() < 0.01:
+				body.freeze(FREEZE_DURATION)
 		body.take_damage(int(damage), damage_type)
-		print("[Projectile] Hit %s for %d damage!" % [body.name, int(damage)])
-	
-	# Apply type-specific effects
 	match damage_type:
 		GunTypes.Type.EXPLOSIVE:
-			# Explosive ALWAYS explodes on any collision (enemy, wall, ground)
 			_explode()
-			queue_free()
 		GunTypes.Type.FREEZING:
-			# Freezing explodes on any collision
-			_freeze_nearby()
-			queue_free()
+			_spawn_freeze_effect()
 		GunTypes.Type.IMPLOSIVE:
-			# Implosive explodes on any collision
 			_implode_nearby()
-			queue_free()
-		GunTypes.Type.ACCELERATING:
-			if is_enemy:
-				# Accelerating only pierces through enemies, not walls
-				_pierce_and_split(body)
-			else:
-				# Hit a wall - just destroy
-				queue_free()
+	if damage_type == GunTypes.Type.ACCELERATING and direct_target:
+		if bounce_count > 0:
+			_bounce(normal, body)
+		_impact_handled = true
+		_pierce_and_split(body)
+		return
+	if bounce_count > 0:
+		_bounce(normal, body)
+	else:
+		_impact_handled = true
+		queue_free()
 
+func _bounce(normal: Vector3, body: Node3D = null) -> void:
+	bounce_count -= 1
+	var surface_normal := normal.normalized()
+	if surface_normal.is_zero_approx():
+		surface_normal = (global_position - _body_center(body)).normalized() if is_instance_valid(body) else -direction
+	if surface_normal.is_zero_approx() or direction.dot(surface_normal) >= -0.001:
+		surface_normal = -direction
+	direction = direction.bounce(surface_normal).normalized()
+	global_position += direction * IMPACT_CLEARANCE
+	position_4d = Vector4D.from_vector3(global_position, position_4d.w)
+
+func _fire_laser() -> void:
+	set_physics_process(false)
+	var remaining := LASER_RANGE
+	while remaining > 0.001 and not _impact_handled:
+		var start := global_position
+		var hit := _trace_segment(start, start + direction * remaining)
+		var finish: Vector3 = start + direction * remaining if hit.is_empty() else hit.position
+		_spawn_laser_segment(start, finish)
+		global_position = finish
+		position_4d = Vector4D.from_vector3(global_position, position_4d.w)
+		remaining = maxf(0.0, remaining - start.distance_to(finish))
+		if hit.is_empty():
+			break
+		if hit.has("portal"):
+			notify_portal_crossing(hit.portal)
+			continue
+		_resolve_collision(hit.get("collider") as Node3D, hit.normal)
+		if _impact_handled or remaining <= 0.001:
+			return
+	_impact_handled = true
+	queue_free()
+
+func _spawn_laser_segment(start: Vector3, finish: Vector3) -> void:
+	var segment := finish - start
+	if segment.length_squared() < 0.000001:
+		return
+	var effect := _new_slice_effect("LaserBeam")
+	effect.global_position = (start + finish) * 0.5
+	var visual := MeshInstance3D.new()
+	var cylinder := CylinderMesh.new()
+	cylinder.top_radius = 0.025 * power_multiplier
+	cylinder.bottom_radius = 0.025 * power_multiplier
+	cylinder.height = segment.length()
+	cylinder.radial_segments = 8
+	visual.mesh = cylinder
+	visual.basis = Basis(Quaternion(Vector3.UP, segment.normalized()))
+	visual.material_override = _effect_material(Color(_color, 0.9))
+	visual.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	effect.add_child(visual)
+	var tween := effect.create_tween()
+	tween.tween_property(visual.material_override, "albedo_color:a", 0.0, 0.12)
+	tween.tween_callback(effect.queue_free)
 
 ## Get enemies AND player within a radius, respecting 4D W-slice
 ## Returns all valid targets for AOE effects (enemies + player if not shooter)
@@ -297,6 +542,8 @@ func _get_nearby_targets(radius: float) -> Array[Node]:
 	
 	for target in all_targets:
 		if not is_instance_valid(target) or target == shooter:
+			continue
+		if target is Node3D and not _target_matches_room(target):
 			continue
 		
 		# Check 3D distance
@@ -324,15 +571,16 @@ func _explode() -> void:
 	# Spawn visual effect
 	_spawn_explosion_effect()
 	
-	var nearby: Array[Node] = _get_nearby_targets(EXPLOSION_RADIUS)
+	var radius := EXPLOSION_RADIUS * power_multiplier
+	var nearby: Array[Node] = _get_nearby_targets(radius)
 	var impact_point: Vector3 = global_position
 	
 	for target in nearby:
 		var dist: float = impact_point.distance_to(target.global_position)
-		var falloff: float = 1.0 - (dist / EXPLOSION_RADIUS)
+		var falloff: float = 1.0 - (dist / radius)
 		
 		# Apply splash damage (skip if already hit by direct impact)
-		if target not in hit_bodies:
+		if target != _impact_target:
 			var aoe_damage: int = int(damage * falloff)  # 100% AOE damage with distance falloff
 			if aoe_damage > 0 and target.has_method("take_damage"):
 				target.take_damage(aoe_damage, damage_type)
@@ -345,7 +593,7 @@ func _explode() -> void:
 		
 		# Add upward component for a more dramatic effect
 		knockback_dir = (knockback_dir + Vector3.UP * 0.5).normalized()
-		var knockback_force: Vector3 = knockback_dir * EXPLOSION_KNOCKBACK * falloff
+		var knockback_force: Vector3 = knockback_dir * EXPLOSION_KNOCKBACK * power_multiplier * falloff
 		
 		if target.has_method("apply_external_force"):
 			target.apply_external_force(knockback_force)
@@ -354,97 +602,104 @@ func _explode() -> void:
 
 ## Spawn the expanding sphere visual effect for explosions
 func _spawn_explosion_effect() -> void:
-	var effect := Node3D.new()
-	effect.name = "ExplosionEffect"
-	effect.global_position = global_position
-	
-	# Create expanding sphere mesh
-	var mesh_instance := MeshInstance3D.new()
-	var sphere := SphereMesh.new()
-	sphere.radius = 0.1
-	sphere.height = 0.2
-	mesh_instance.mesh = sphere
-	
-	# Transparent orange material
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(1.0, 0.5, 0.1, 0.6)  # Orange, semi-transparent
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.emission_enabled = true
-	mat.emission = Color(1.0, 0.4, 0.0)
-	mat.emission_energy_multiplier = 2.0
-	mesh_instance.material_override = mat
-	
-	effect.add_child(mesh_instance)
-	get_tree().current_scene.add_child(effect)
-	
-	# Animate the expansion
-	var tween := effect.create_tween()
-	tween.set_parallel(true)
-	
-	# Expand to full radius
-	tween.tween_property(mesh_instance, "scale", Vector3.ONE * EXPLOSION_RADIUS * 2.0, 0.3).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_EXPO)
-	
-	# Fade out
-	tween.tween_property(mat, "albedo_color:a", 0.0, 0.3).set_ease(Tween.EASE_IN)
-	tween.tween_property(mat, "emission_energy_multiplier", 0.0, 0.3)
-	
-	# Destroy after animation
+	var effect := _new_slice_effect("ExplosionEffect")
+	var shell := _effect_sphere(effect, Color(1.0, 0.4, 0.06, 0.16))
+	shell.scale = Vector3.ONE * 0.15
+	var tween := effect.create_tween().set_parallel(true)
+	tween.tween_property(shell, "scale", Vector3.ONE * EXPLOSION_RADIUS * power_multiplier, 0.4).set_trans(Tween.TRANS_EXPO).set_ease(Tween.EASE_OUT)
+	tween.tween_property(shell.material_override, "albedo_color:a", 0.0, 0.4)
+	_add_impact_rings(effect, EXPLOSION_RADIUS * power_multiplier, Color(1.0, 0.55, 0.1, 0.75), false, 0.4)
 	tween.chain().tween_callback(effect.queue_free)
 
+func _new_slice_effect(effect_name: String) -> SliceEffect:
+	var effect := SliceEffect.new()
+	effect.name = effect_name
+	effect.impact_w = position_4d.w
+	effect.owning_room = _source_room
+	get_tree().current_scene.add_child(effect, true)
+	effect.global_position = global_position
+	return effect
 
-## FREEZING: Freeze nearby targets
+func _effect_material(color: Color) -> StandardMaterial3D:
+	var material := StandardMaterial3D.new()
+	material.albedo_color = color
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	material.emission_enabled = true
+	material.emission = color
+	material.emission_energy_multiplier = 1.5
+	return material
+
+func _effect_sphere(effect: Node3D, color: Color) -> MeshInstance3D:
+	var visual := MeshInstance3D.new()
+	var sphere := SphereMesh.new()
+	sphere.radius = 1.0
+	sphere.height = 2.0
+	sphere.radial_segments = 16
+	sphere.rings = 8
+	visual.mesh = sphere
+	visual.material_override = _effect_material(color)
+	visual.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	effect.add_child(visual)
+	return visual
+
+func _add_impact_rings(effect: Node3D, radius: float, color: Color, inward: bool, duration: float) -> void:
+	for axis in range(3):
+		var visual := MeshInstance3D.new()
+		var ring := TorusMesh.new()
+		ring.inner_radius = 0.975
+		ring.outer_radius = 1.0
+		ring.rings = 32
+		ring.ring_segments = 4
+		visual.mesh = ring
+		visual.material_override = _effect_material(color)
+		visual.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		visual.rotation = Vector3(PI * 0.5 if axis == 1 else 0.0, 0.0, PI * 0.5 if axis == 2 else 0.0)
+		visual.scale = Vector3.ONE * (radius if inward else 0.15)
+		effect.add_child(visual)
+		var tween := visual.create_tween().set_parallel(true)
+		tween.tween_property(visual, "scale", Vector3.ONE * (0.04 if inward else radius), duration).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN if inward else Tween.EASE_OUT)
+		tween.tween_property(visual, "rotation:y", visual.rotation.y + PI * 0.7, duration)
+		tween.tween_property(visual.material_override, "albedo_color:a", 0.0, duration)
+
+func _add_impact_shards(effect: Node3D, radius: float, color: Color, inward: bool, duration: float) -> void:
+	for index in range(16):
+		# Golden-angle distribution is evenly spaced and stable for every impact.
+		var vertical: float = 1.0 - 2.0 * (index + 0.5) / 16.0
+		var radial: float = sqrt(1.0 - vertical * vertical)
+		var angle: float = index * 2.399963
+		var vector := Vector3(cos(angle) * radial, vertical, sin(angle) * radial)
+		var shard := MeshInstance3D.new()
+		var prism := PrismMesh.new()
+		prism.size = Vector3(0.1, 0.4, 0.1)
+		shard.mesh = prism
+		shard.material_override = _effect_material(color)
+		shard.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		shard.position = vector * (radius if inward else 0.15)
+		shard.rotation = Vector3(angle, angle * 0.5, angle)
+		effect.add_child(shard)
+		var tween := shard.create_tween().set_parallel(true)
+		tween.tween_property(shard, "position", vector * (0.05 if inward else radius), duration).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN if inward else Tween.EASE_OUT)
+		tween.tween_property(shard, "rotation", shard.rotation + Vector3(2.0, 3.0, 1.0), duration)
+		tween.tween_property(shard.material_override, "albedo_color:a", 0.0, duration)
+
+## Compatibility entry point: ice bursts are cosmetic; only direct hits roll.
 func _freeze_nearby() -> void:
-	print("[Projectile] FREEZE BURST!")
-	
-	# Spawn visual effect
 	_spawn_freeze_effect()
-	
-	var nearby: Array[Node] = _get_nearby_targets(FREEZE_RADIUS)
-	
-	for target in nearby:
-		if target.has_method("freeze"):
-			target.freeze(FREEZE_DURATION)
-			print("[Projectile] Froze %s" % target.name)
 
 
 ## Spawn the translucent blue sphere visual effect for freezing
 func _spawn_freeze_effect() -> void:
-	var effect := Node3D.new()
-	effect.name = "FreezeEffect"
-	effect.global_position = global_position
-	
-	# Create sphere mesh at full radius immediately
-	var mesh_instance := MeshInstance3D.new()
-	var sphere := SphereMesh.new()
-	sphere.radius = FREEZE_RADIUS
-	sphere.height = FREEZE_RADIUS * 2.0
-	mesh_instance.mesh = sphere
-	
-	# Translucent blue material
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.3, 0.8, 1.0, 0.5)  # Cyan, semi-transparent
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.emission_enabled = true
-	mat.emission = Color(0.3, 0.8, 1.0)
-	mat.emission_energy_multiplier = 1.5
-	mesh_instance.material_override = mat
-	
-	effect.add_child(mesh_instance)
-	get_tree().current_scene.add_child(effect)
-	
-	# Animate a brief flash then fade
+	var effect := _new_slice_effect("FreezeEffect")
+	var color := Color(0.35, 0.85, 1.0, 0.85)
+	_add_impact_rings(effect, FREEZE_RADIUS * power_multiplier, color, false, 0.55)
+	_add_impact_shards(effect, FREEZE_RADIUS * power_multiplier, color, false, 0.65)
+	var shell := _effect_sphere(effect, Color(0.35, 0.8, 1.0, 0.1))
+	shell.scale = Vector3.ONE * FREEZE_RADIUS * power_multiplier
 	var tween := effect.create_tween()
-	tween.set_parallel(true)
-	
-	# Quick fade out
-	tween.tween_property(mat, "albedo_color:a", 0.0, 0.25).set_ease(Tween.EASE_IN)
-	tween.tween_property(mat, "emission_energy_multiplier", 0.0, 0.25)
-	
-	# Destroy after animation
-	tween.chain().tween_callback(effect.queue_free)
-
+	tween.tween_property(shell.material_override, "albedo_color:a", 0.0, 0.7)
+	tween.tween_callback(effect.queue_free)
 
 ## IMPLOSIVE: Pull targets toward impact point
 func _implode_nearby() -> void:
@@ -453,7 +708,8 @@ func _implode_nearby() -> void:
 	# Spawn visual effect
 	_spawn_implosion_effect()
 	
-	var nearby: Array[Node] = _get_nearby_targets(IMPLOSION_RADIUS)
+	var radius := IMPLOSION_RADIUS * power_multiplier
+	var nearby: Array[Node] = _get_nearby_targets(radius)
 	var impact_point: Vector3 = global_position
 	
 	for target in nearby:
@@ -462,8 +718,8 @@ func _implode_nearby() -> void:
 		
 		# Force is stronger the closer they are
 		var dist: float = global_position.distance_to(target.global_position)
-		var force_mult: float = 1.0 - (dist / IMPLOSION_RADIUS) * 0.5
-		var force: Vector3 = pull_dir * IMPLOSION_FORCE * force_mult
+		var force_mult: float = 1.0 - (dist / radius) * 0.5
+		var force: Vector3 = pull_dir * IMPLOSION_FORCE * power_multiplier * force_mult
 		
 		if target.has_method("apply_external_force"):
 			target.apply_external_force(force)
@@ -472,102 +728,57 @@ func _implode_nearby() -> void:
 
 ## Spawn the purple shrinking sphere visual effect for implosion
 func _spawn_implosion_effect() -> void:
-	var effect := Node3D.new()
-	effect.name = "ImplosionEffect"
-	effect.global_position = global_position
-	
-	# Create sphere mesh starting at full radius
-	var mesh_instance := MeshInstance3D.new()
-	var sphere := SphereMesh.new()
-	sphere.radius = 0.1
-	sphere.height = 0.2
-	mesh_instance.mesh = sphere
-	mesh_instance.scale = Vector3.ONE * IMPLOSION_RADIUS * 2.0  # Start big
-	
-	# Translucent purple material
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.6, 0.2, 1.0, 0.6)  # Purple, semi-transparent
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.emission_enabled = true
-	mat.emission = Color(0.5, 0.1, 0.9)
-	mat.emission_energy_multiplier = 2.0
-	mesh_instance.material_override = mat
-	
-	effect.add_child(mesh_instance)
-	get_tree().current_scene.add_child(effect)
-	
-	# Animate the shrink (opposite of explosion)
-	var tween := effect.create_tween()
-	tween.set_parallel(true)
-	
-	# Shrink to zero
-	tween.tween_property(mesh_instance, "scale", Vector3.ZERO, 0.25).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_EXPO)
-	
-	# Fade out
-	tween.tween_property(mat, "albedo_color:a", 0.0, 0.25).set_ease(Tween.EASE_IN)
-	tween.tween_property(mat, "emission_energy_multiplier", 0.0, 0.25)
-	
-	# Destroy after animation
+	var effect := _new_slice_effect("ImplosionEffect")
+	var color := Color(0.75, 0.35, 1.0, 0.85)
+	_add_impact_rings(effect, IMPLOSION_RADIUS * power_multiplier, color, true, 0.6)
+	_add_impact_shards(effect, IMPLOSION_RADIUS * power_multiplier, color, true, 0.6)
+	var core := _effect_sphere(effect, Color(0.35, 0.08, 0.65, 0.7))
+	core.scale = Vector3.ONE * 0.45
+	var tween := effect.create_tween().set_parallel(true)
+	tween.tween_property(core, "scale", Vector3.ONE * 0.04, 0.7).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
+	tween.tween_property(core.material_override, "albedo_color:a", 0.0, 0.7)
 	tween.chain().tween_callback(effect.queue_free)
 
-
 ## ACCELERATING: Pierce through and split into two
-func _pierce_and_split(hit_enemy: Node) -> void:
-	print("[Projectile] PIERCE!")
-	
-	# Check if we can split (damage > 1)
-	if damage <= 1:
-		print("[Projectile] Minimum damage reached, no more splitting")
+func _pierce_and_split(_hit_enemy: Node) -> void:
+	if damage <= 1.0:
 		queue_free()
 		return
-	
-	# Create two child projectiles with half damage
-	var half_damage: float = damage / 2.0
-	
-	# Calculate split directions (rotate from current direction)
-	var right: Vector3 = direction.cross(Vector3.UP).normalized()
+	var right := direction.cross(Vector3.UP).normalized()
 	if right.length_squared() < 0.01:
 		right = direction.cross(Vector3.FORWARD).normalized()
-	
-	var dir_left: Vector3 = direction.rotated(right, SPLIT_ANGLE).normalized()
-	var dir_right: Vector3 = direction.rotated(right, -SPLIT_ANGLE).normalized()
-	
-	# Spawn child projectiles
-	var spawn_pos: Vector3 = global_position + direction * 0.5  # Slightly ahead
-	
-	var child1: Projectile = Projectile.new()
-	child1.direction = dir_left
-	child1.speed = speed
-	child1.damage = half_damage
-	child1.damage_type = damage_type
-	child1.shooter = shooter
-	child1.global_position = spawn_pos
-	child1.position_4d = Vector4D.from_vector3(spawn_pos, position_4d.w)
-	child1.hit_bodies = hit_bodies.duplicate()  # Inherit hit list
-	
-	var child2: Projectile = Projectile.new()
-	child2.direction = dir_right
-	child2.speed = speed
-	child2.damage = half_damage
-	child2.damage_type = damage_type
-	child2.shooter = shooter
-	child2.global_position = spawn_pos
-	child2.position_4d = Vector4D.from_vector3(spawn_pos, position_4d.w)
-	child2.hit_bodies = hit_bodies.duplicate()  # Inherit hit list
-	
-	# Add children to scene
-	get_tree().current_scene.add_child(child1)
-	get_tree().current_scene.add_child(child2)
-	
-	print("[Projectile] Split into 2 projectiles with %.1f damage each" % half_damage)
-	
-	# Destroy parent
+	var split_directions := [direction.rotated(right, SPLIT_ANGLE).normalized(), direction.rotated(right, -SPLIT_ANGLE).normalized()]
+	for child_direction in split_directions:
+		var child := Projectile.new()
+		child.direction = child_direction
+		child.speed = speed
+		child.damage = damage * 0.5
+		child.damage_type = damage_type
+		child.shooter = shooter
+		child.gun_stats = gun_stats
+		child.velocity_w = velocity_w
+		child.bounce_count = bounce_count
+		child.homing_strength = homing_strength
+		child.laser_guided = laser_guided
+		child.power_multiplier = power_multiplier
+		child.scale = scale
+		child.lifetime = maxf(0.05, lifetime - _time_alive)
+		child._source_room = _source_room
+		child._source_room_id = _source_room_id
+		child.hit_bodies = hit_bodies.duplicate()
+		child._recent_hit_bodies = _recent_hit_bodies.duplicate()
+		var spawn_pos: Vector3 = global_position + child_direction * IMPACT_CLEARANCE
+		child._set_spawn_origin(spawn_pos)
+		child.position_4d = Vector4D.from_vector3(spawn_pos, position_4d.w)
+		get_tree().current_scene.add_child(child)
+		var flagella := get_node_or_null("Flagella")
+		if flagella:
+			load("res://scripts/items/item_attachments.gd").decorate_projectile(child, flagella.get_child_count())
+		child.launch(child_direction)
 	queue_free()
 
-
 ## Factory method to create a projectile from gun stats
-static func create_from_stats(stats: GunStats, origin: Vector3, dir: Vector3, shooter_node: Node = null, w_position: float = 0.0) -> Projectile:
+static func create_from_stats(stats: GunStats, origin: Vector3, dir: Vector3, shooter_node: Node = null, w_position: float = 0.0, roll_critical: bool = true) -> Projectile:
 	var proj := Projectile.new()
 	proj.gun_stats = stats
 	proj.direction = dir.normalized()
@@ -575,13 +786,19 @@ static func create_from_stats(stats: GunStats, origin: Vector3, dir: Vector3, sh
 	proj.damage = stats.get_scaled_damage()
 	proj.damage_type = stats.gun_type
 	proj.shooter = shooter_node
-	proj.global_position = origin
+	proj._set_spawn_origin(origin)
 	proj.position_4d = Vector4D.from_vector3(origin, w_position)
 	
 	# Crit check
-	if stats.roll_crit():
+	if roll_critical and stats.roll_crit():
 		proj.damage *= stats.get_scaled_crit_damage()
 		print("[Projectile] CRITICAL HIT!")
 	
 	return proj
+
+## Factories run outside the tree; resolve world coordinates only after parenting.
+func _set_spawn_origin(origin: Vector3) -> void:
+	position = origin
+	_pending_world_origin = origin
+	_has_pending_world_origin = true
 

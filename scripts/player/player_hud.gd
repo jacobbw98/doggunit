@@ -12,6 +12,7 @@ var gun_labels: Array[Label] = []
 # Player reference
 var player: Node
 var weapon_manager: WeaponManager
+var _observed_gun: Gun
 
 func _ready() -> void:
 	_create_ui()
@@ -108,6 +109,8 @@ func _connect_to_player() -> void:
 		weapon_manager = player.get_node("Camera3D/WeaponManager")
 		weapon_manager.weapon_switched.connect(_on_weapon_switched)
 		weapon_manager.weapon_picked_up.connect(_on_weapon_picked_up)
+		_update_gun_slots()
+		_on_weapon_switched(weapon_manager.current_gun_index, weapon_manager.get_current_gun())
 	
 	# Initial update
 	if player.has_method("get_health"):
@@ -131,6 +134,9 @@ func _on_health_changed(current: int, max_hp: int) -> void:
 			fill.bg_color = Color(0.2, 0.8, 0.2)  # Green
 
 func _on_weapon_switched(index: int, gun: Gun) -> void:
+	if is_instance_valid(_observed_gun) and _observed_gun.ammo_changed.is_connected(_on_ammo_changed):
+		_observed_gun.ammo_changed.disconnect(_on_ammo_changed)
+	_observed_gun = gun
 	# Update slot highlights
 	for i in range(3):
 		var slot := gun_slots[i]
@@ -145,8 +151,9 @@ func _on_weapon_switched(index: int, gun: Gun) -> void:
 	
 	# Update ammo
 	if gun and gun.stats:
-		ammo_label.text = "%d / %d" % [gun.current_ammo, gun.stats.max_ammo]
-		gun.ammo_changed.connect(_on_ammo_changed)
+		ammo_label.text = "%d / %d" % [gun.current_ammo, gun.get_magazine_size()]
+		if not gun.ammo_changed.is_connected(_on_ammo_changed):
+			gun.ammo_changed.connect(_on_ammo_changed)
 
 func _on_weapon_picked_up(gun: Gun) -> void:
 	_update_gun_slots()
@@ -174,4 +181,5 @@ func _process(_delta: float) -> void:
 	if weapon_manager:
 		var gun = weapon_manager.get_current_gun()
 		if gun and gun.stats:
-			ammo_label.text = "%d / %d" % [gun.current_ammo, gun.stats.max_ammo]
+			ammo_label.text = "RELOAD %.1fs" % (gun.reload_remaining + gun._reload_delay) if gun.is_reloading else "%d / %d" % [gun.current_ammo, gun.get_magazine_size()]
+			ammo_label.add_theme_font_size_override("font_size", 18 if gun.is_reloading else 24)

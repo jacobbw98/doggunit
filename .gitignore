@@ -1,0 +1,15 @@
+# Godot regenerates its imported resources and editor state.
+/.godot/
+/debug.log
+
+# Local tooling and editable-model backups.
+__pycache__/
+*.py[cod]
+*.blend1
+*.blend2
+/assets/items/source/catalog_previous_models/
+/assets/mascot/source/mappo-pre-katamari.glb
+
+# The CSV design catalogs are excluded from Godot's translation importer.
+/data/*.translation
+/data/*.csv.import

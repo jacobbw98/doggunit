@@ -1,0 +1,46 @@
+UniMate reload animation source
+
+Generated 2026-10-08 using the official source archive from
+https://github.com/Friedrich-M/UniMate (main), its included Unitree Go2 rig,
+and the recommended released model:
+https://huggingface.co/Linzhan/UniMate/tree/main/unimate_uniml3d_f60_v3
+
+The generator ran in an isolated Python 3.10.20 venv outside the game at
+<UNIMATE_ROOT>/.venv, using PyTorch 2.5.1+cu124 on NVIDIA GeForce RTX 4090.
+UNIMATE_ROOT denotes your chosen external UniMate checkout directory; replace
+it with that path when reproducing the generation. The game contains the small
+normalized motion JSON and an identical embedded native GDScript companion,
+reload_motion_data.gd. Preloading that companion guarantees the motion data is
+included in Godot's exported PCK. Playback needs no Python, checkpoint, GPU
+inference, network connection or downloaded training dataset.
+
+Run these commands from the external UniMate repository with its venv Python:
+
+python -m unimate.inference.sample --exp-dir outputs/unimate_uniml3d_f60_v3 --asset assets/examples/unitree_go2 --prompt "An object lowers its head to eat, then lifts its head." --num-repetitions 3 --seed 12031 --cfg-scale 3 --batch-size 1 --output-dir outputs/samples/doggunit_reload
+
+python -m unimate.inference.sample --exp-dir outputs/unimate_uniml3d_f60_v3 --asset assets/examples/unitree_go2 --prompt "An object bows forward." "An object crouches down with its head lowered." "An object bends down to eat." --num-repetitions 3 --seed 16421 --cfg-scale 5 --batch-size 1 --only-save-motion --output-dir outputs/samples/doggunit_reload_bow
+
+Then run this game's source/retarget_unimate.py --unimate-root <external repo>.
+Three selected raw generated samples and full generation manifests are kept
+here for audit and re-export. The source folder has .gdignore so these QA files
+and scripts never become game resources.
+
+Retarget notes:
+The example Head_upper joint is a leaf and has no independent rotating child.
+The adapter extracts head-to-body and hip-plane angles from the generated
+RIFKE joint positions. Its eating samples lift the front; their pitch is
+deliberately mirrored into a held-dog eating bow. This axis remap is recorded
+in the exported provenance. It preserves generated timing and secondary
+motion while removing translation, subtracting first-frame pose, smoothing
+five frames and limiting head/body rotation to 0.40/0.095 radians. Runtime
+fades both ends and maps the two-second clips to each breed's reload interval.
+
+Credits: UniMate: One Unified Model to Animate Diverse Skeletons, Linzhan Mou,
+Jiahui Lei, Zhiyang Dou, Chenyue Cai, Chaoyue Song, Adam Finkelstein and Szymon
+Rusinkiewicz (2026), https://arxiv.org/abs/2609.05415.
+
+Source code is MIT; checkpoint weights are CC BY-NC 4.0. The official model
+card discusses third-party training-data terms and provenance. Keep these
+attributions with the derived motion assets. Official terms:
+https://huggingface.co/Linzhan/UniMate/blob/main/README.md
+https://github.com/Friedrich-M/UniMate/blob/main/LICENSE

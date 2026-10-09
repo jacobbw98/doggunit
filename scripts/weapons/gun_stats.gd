@@ -8,8 +8,14 @@ class_name GunStats
 extends Resource
 
 @export var gun_name: String = "Unnamed Dog"
+@export_multiline var description: String = ""
+@export_multiline var flavor_text: String = ""
+## Breed and elemental type are independent. Empty keeps the original starter visual.
+@export var breed_id: String = ""
 @export var gun_type: GunTypes.Type = GunTypes.Type.EXPLOSIVE
 @export var rarity: GunTypes.Rarity = GunTypes.Rarity.OK
+## Opt in for Mappo's personal model; ordinary explosive drops keep their pup visual.
+@export var mascot_visual: bool = false
 
 # Base stats (scaled by rarity)
 @export_group("Kinetic Stats (Explosive)")
@@ -32,6 +38,21 @@ extends Resource
 @export_group("Ammo")
 @export var max_ammo: int = 30
 @export var fire_rate: float = 0.2  # Seconds between shots
+## Negative derives a breed-specific time; a positive CSV value overrides it.
+@export var reload_seconds: float = -1.0
+const INITIAL_SUSTAINED_DPS: float = 44.0
+
+func get_reload_seconds() -> float:
+	if reload_seconds > 0.0:
+		return reload_seconds
+	# Balance full magazines including the last shot's cooldown, standard crits,
+	# and reload. Rarity and acquired items intentionally increase this baseline.
+	var expected_hit := base_damage * projectile_count * (1.0 + crit_chance * (crit_damage_multiplier - 1.0))
+	return maxf(0.35, max_ammo * expected_hit / INITIAL_SUSTAINED_DPS - max_ammo * fire_rate)
+
+func get_initial_sustained_dps() -> float:
+	var expected_hit := base_damage * projectile_count * (1.0 + crit_chance * (crit_damage_multiplier - 1.0))
+	return max_ammo * expected_hit / (max_ammo * fire_rate + get_reload_seconds())
 
 # Get damage with rarity scaling
 func get_scaled_damage() -> float:

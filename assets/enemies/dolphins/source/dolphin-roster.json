@@ -1,0 +1,146 @@
+{
+  "generator": "Blender 5.2 low-poly flat shading",
+  "normalized_height_m": 1.5,
+  "models": [
+    {
+      "id": "reef_scout",
+      "name": "Reef Scout",
+      "archetype": 0,
+      "triangles": 920,
+      "parts": 18
+    },
+    {
+      "id": "sailor",
+      "name": "Deckhand Dolphin",
+      "archetype": 0,
+      "triangles": 1332,
+      "parts": 21
+    },
+    {
+      "id": "pearl",
+      "name": "Pearl Courier",
+      "archetype": 0,
+      "triangles": 1404,
+      "parts": 34
+    },
+    {
+      "id": "coral",
+      "name": "Coral Gardener",
+      "archetype": 0,
+      "triangles": 1204,
+      "parts": 36
+    },
+    {
+      "id": "comet",
+      "name": "Comet Flipper",
+      "archetype": 1,
+      "triangles": 824,
+      "parts": 18
+    },
+    {
+      "id": "racing",
+      "name": "Turbo Porpoise",
+      "archetype": 1,
+      "triangles": 996,
+      "parts": 22
+    },
+    {
+      "id": "swordfin",
+      "name": "Swordfin Duelist",
+      "archetype": 1,
+      "triangles": 1008,
+      "parts": 22
+    },
+    {
+      "id": "storm",
+      "name": "Storm Skimmer",
+      "archetype": 1,
+      "triangles": 1060,
+      "parts": 21
+    },
+    {
+      "id": "lighthouse",
+      "name": "Lighthouse Lookout",
+      "archetype": 2,
+      "triangles": 954,
+      "parts": 21
+    },
+    {
+      "id": "scholar",
+      "name": "Sonar Scholar",
+      "archetype": 2,
+      "triangles": 1104,
+      "parts": 22
+    },
+    {
+      "id": "cosmic",
+      "name": "Cosmic Listener",
+      "archetype": 2,
+      "triangles": 1116,
+      "parts": 21
+    },
+    {
+      "id": "icicle",
+      "name": "Icicle Oracle",
+      "archetype": 2,
+      "triangles": 852,
+      "parts": 25
+    },
+    {
+      "id": "anchor",
+      "name": "Anchor Hauler",
+      "archetype": 3,
+      "triangles": 1396,
+      "parts": 25
+    },
+    {
+      "id": "armored",
+      "name": "Reef Juggernaut",
+      "archetype": 3,
+      "triangles": 952,
+      "parts": 21
+    },
+    {
+      "id": "volcano",
+      "name": "Volcano Belcher",
+      "archetype": 3,
+      "triangles": 1044,
+      "parts": 26
+    },
+    {
+      "id": "puffer",
+      "name": "Puffer Bruiser",
+      "archetype": 3,
+      "triangles": 1044,
+      "parts": 31
+    },
+    {
+      "id": "crown",
+      "name": "THE REEF REGENT",
+      "archetype": 4,
+      "triangles": 992,
+      "parts": 24
+    },
+    {
+      "id": "pirate",
+      "name": "CAPTAIN BLACKFIN",
+      "archetype": 4,
+      "triangles": 928,
+      "parts": 25
+    },
+    {
+      "id": "kraken",
+      "name": "KRAKEN'S BEST FRIEND",
+      "archetype": 4,
+      "triangles": 2100,
+      "parts": 73
+    },
+    {
+      "id": "clockwork",
+      "name": "ADMIRAL TICKTOCK",
+      "archetype": 4,
+      "triangles": 1720,
+      "parts": 41
+    }
+  ]
+}

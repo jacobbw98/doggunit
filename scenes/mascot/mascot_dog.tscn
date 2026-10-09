@@ -1,0 +1,9 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/mascot/generated_mascot.gd" id="1_mappo"]
+[ext_resource type="PackedScene" path="res://assets/mascot/mappo.glb" id="2_model"]
+
+[node name="Mappo" type="Node3D"]
+script = ExtResource("1_mappo")
+model = ExtResource("2_model")
+cartoon_materials = true

@@ -1,0 +1,14 @@
+{
+  "source": "data/items.csv",
+  "assets": [
+    "boneswarm",
+    "bounce",
+    "homing",
+    "flesh",
+    "tofu",
+    "aminita",
+    "cubensis",
+    "lazer"
+  ],
+  "style": "Original flat-shaded toy models"
+}

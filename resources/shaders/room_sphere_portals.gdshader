@@ -19,6 +19,23 @@ uniform vec3 sphere_center = vec3(0.0, 0.0, 0.0);
 varying vec3 world_vertex;
 varying vec3 local_vertex;
 
+float moss_hash(vec3 p) {
+	p = fract(p * 0.1031);
+	p += dot(p, p.yzx + 33.33);
+	return fract((p.x + p.y) * p.z);
+}
+
+float moss_noise(vec3 p) {
+	vec3 cell = floor(p);
+	vec3 f = fract(p);
+	f = f * f * (3.0 - 2.0 * f);
+	return mix(
+		mix(mix(moss_hash(cell), moss_hash(cell + vec3(1,0,0)), f.x),
+			mix(moss_hash(cell + vec3(0,1,0)), moss_hash(cell + vec3(1,1,0)), f.x), f.y),
+		mix(mix(moss_hash(cell + vec3(0,0,1)), moss_hash(cell + vec3(1,0,1)), f.x),
+			mix(moss_hash(cell + vec3(0,1,1)), moss_hash(cell + vec3(1,1,1)), f.x), f.y), f.z);
+}
+
 void vertex() {
 	world_vertex = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	local_vertex = VERTEX;
@@ -53,13 +70,21 @@ void fragment() {
 		}
 	}
 	
-	// Sample texture with proper UV scaling
-	vec2 scaled_uv = UV * uv_scale;
-	vec4 tex_color = texture(albedo_texture, scaled_uv);
-	
-	// Apply albedo color tint to texture
-	ALBEDO = tex_color.rgb * albedo_color.rgb;
-	
-	// Subtle emission
-	EMISSION = emission_color.rgb * emission_strength;
+	// Seamless object-space moss: constant detail size on every curved floor.
+	vec3 p = local_vertex - sphere_center;
+	float cushions = moss_noise(p * 0.62);
+	float broad = moss_noise(p * 0.19 + vec3(8.0));
+	float grain = moss_noise(p * 8.0);
+	float flecks = moss_noise(p * 23.0);
+	vec3 forest = mix(vec3(0.075, 0.17, 0.095), vec3(0.27, 0.43, 0.16),
+		smoothstep(0.23, 0.78, cushions));
+	forest = mix(forest, vec3(0.40, 0.52, 0.23), smoothstep(0.59, 0.83, broad) * 0.42);
+	forest *= 0.88 + grain * 0.23;
+	// Tiny warm leaf litter and pale moss spores, kept sparse.
+	float litter = smoothstep(0.79, 0.91, moss_noise(p * 3.8 + vec3(42.0)));
+	forest = mix(forest, vec3(0.47, 0.32, 0.14), litter * 0.48);
+	forest += vec3(0.12, 0.15, 0.06) * smoothstep(0.84, 0.96, flecks);
+	ALBEDO = forest * albedo_color.rgb;
+	ROUGHNESS = 0.94;
+	EMISSION = ALBEDO * 0.035 + emission_color.rgb * emission_strength * 0.15;
 }

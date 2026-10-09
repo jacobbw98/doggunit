@@ -1,773 +1,496 @@
-# LevelGenerator - Procedural level generator for connected sphere rooms
-# Generates a BRANCHING graph of rooms with portals connecting them (maze-like)
+# Connected, physically adjoining sphere rooms. Portal traversal never moves XYZ.
 class_name LevelGenerator
 extends Node
 
-## Base radius for rooms
 @export var base_room_radius: float = 20.0
-
-## W-axis spacing between rooms (each room at different W)
-const W_SPACING: float = 30.0
-
-## Number of normal rooms to generate
-@export var num_normal_rooms: int = 5
-
-## Random seed (0 = random)
+@export_range(1, 30) var num_normal_rooms: int = 5
+@export_range(0, 3) var num_secret_rooms: int = 1
 @export var seed_value: int = 0
-
-## Auto-generate level on scene load
 @export var auto_generate: bool = false
-
-## Enable room decorations (3D models on sphere surfaces)
 @export var enable_decorations: bool = true
 
-## Generated rooms
-var rooms: Array = []
-
-## Room graph (adjacency list)
-var room_graph: Dictionary = {}  # room_id -> { connections: [], type: int, position: Vector3 }
-
-## Reference to player for spawning
-var player: Node = null
-
-## Current level depth/difficulty
-var level_depth: int = 1
-
-## Room decorator instance
-var _decorator: RoomDecorator = null
-
-## Room type constants (to avoid class_name issues)
+const W_SPACING: float = 100.0
 const ROOM_NORMAL := 0
 const ROOM_BOSS := 1
 const ROOM_ITEM := 2
 const ROOM_SHOP := 3
 const ROOM_GAMBLING := 4
 const ROOM_SPECIAL := 5
+const ROOM_SECRET := 6
+const ROOM_COLORS := RoomTypes.ROOM_COLORS
+const ROOM_SIZES := RoomTypes.ROOM_SIZES
+const LAYOUT_NAMES := ["Branching trails", "Long expedition", "Broad woodland"]
 
-## Room colors
-const ROOM_COLORS := {
-	0: Color(0.2, 0.8, 1.0),   # Normal - Cyan
-	1: Color(1.0, 0.2, 0.2),   # Boss - Red
-	2: Color(1.0, 0.85, 0.2),  # Item - Gold
-	3: Color(1.0, 0.6, 0.2),   # Shop - Orange
-	4: Color(0.6, 0.2, 1.0),   # Gambling - Purple
-	5: Color(0.2, 0.4, 1.0)    # Special - Blue
-}
-
-## Room size multipliers
-const ROOM_SIZES := {
-	0: 1.0,   # Normal
-	1: 2.0,   # Boss (2x size)
-	2: 1.0,   # Item
-	3: 1.0,   # Shop
-	4: 1.0,   # Gambling
-	5: 1.0    # Special
-}
+var rooms: Array = []
+var room_graph: Dictionary = {}
+var player: Node = null
+var level_depth: int = 1
+var layout_style: int = 0
+var current_lit_room_id: int = -1
+var secret_scan_enabled: bool = false
+var _original_room_w: Dictionary = {}
+var _decorator: RoomDecorator = null
+var _rng := RandomNumberGenerator.new()
+var _last_synced_w: float = INF
+var _key_room_ids: Array[int] = []
 
 signal level_generated(rooms: Array)
 signal player_spawned(spawn_room: Node)
-
-## Currently lit room ID (-1 = none)
-var current_lit_room_id: int = -1
-
-## Original W values for each room (for restoration when not adjacent to host)
-var _original_room_w: Dictionary = {}  # room_id -> original W value
+signal room_entered(room: Node)
+signal secret_discovered(room: Node)
 
 func _ready() -> void:
 	add_to_group("level_generator")
-	
-	# Auto-generate level if enabled
 	if auto_generate:
 		call_deferred("_auto_generate_level")
 
-## Called when auto_generate is enabled - generates level and spawns player
 func _auto_generate_level() -> void:
-	print("[LevelGenerator] Auto-generating level...")
-	generate_level(seed_value)
-	await get_tree().process_frame
+	await generate_level(seed_value)
 	spawn_player_in_start_room()
-	print("[LevelGenerator] Auto-generation complete!")
 
 func _process(_delta: float) -> void:
-	# Track player and update room lighting based on proximity
 	if rooms.is_empty():
 		return
-	
-	var p = get_tree().get_first_node_in_group("player")
-	if not p:
+	player = get_tree().get_first_node_in_group("player")
+	if not is_instance_valid(player):
 		return
-	
-	# Find which room the player is in (using both 3D position and W coordinate)
-	var player_w: float = 0.0
-	if p.get("position_4d") != null:
-		player_w = p.position_4d.w
-	var player_room_id: int = _get_player_room_id(p.global_position, player_w)
-	
-	# Only update lights if player changed rooms
-	if player_room_id != current_lit_room_id:
-		_update_room_lights(player_room_id)
-		_update_room_w_sync(player_room_id)  # Sync W for host + adjacent rooms
-		current_lit_room_id = player_room_id
+	var player_w: float = player.position_4d.w if player.get("position_4d") != null else 0.0
+	var room_id := _get_player_room_id(player.global_position, player_w)
+	if room_id >= 0 and room_id != current_lit_room_id:
+		set_active_room(room_id)
+	elif not is_equal_approx(_last_synced_w, player_w):
+		_update_room_w_sync(current_lit_room_id)
+	if secret_scan_enabled:
+		_scan_secret_rooms()
 
-## Get the room ID the player is currently in (aware of W coordinate)
-func _get_player_room_id(player_pos: Vector3, player_w: float) -> int:
-	for i in range(rooms.size()):
-		var room = rooms[i]
+func _get_player_room_id(player_pos: Vector3, _player_w: float) -> int:
+	# Only physically connected rooms can become the host. Distant W layers may
+	# share XYZ, so scanning every sphere can select an unrelated room.
+	var candidates: Array = [0] if current_lit_room_id < 0 else [current_lit_room_id]
+	if current_lit_room_id >= 0:
+		candidates.append_array(get_visible_connections(current_lit_room_id))
+	var best_id := -1
+	var best_penetration: float = -INF
+	for room_id in candidates:
+		var room = rooms[room_id]
 		if not is_instance_valid(room):
 			continue
-		
-		# Check W-coordinate match - skip rooms on different W slices
-		if room.get("_position_4d") != null:
-			var room_w: float = room._position_4d.w
-			var room_radius: float = room.radius if room.get("radius") else 20.0
-			if abs(room_w - player_w) > room_radius:
-				continue  # Skip this room - wrong W slice
-		
-		var room_center: Vector3 = room.global_position
-		var room_radius: float = room.radius if room.get("radius") else 20.0
-		var dist: float = player_pos.distance_to(room_center)
-		if dist < room_radius + 5.0:  # Inside with margin
-			return i
-	return -1
+		var penetration: float = room.radius - player_pos.distance_to(room.global_position)
+		if penetration > best_penetration and penetration > -0.25:
+			best_id = room_id
+			best_penetration = penetration
+	return best_id
 
-## Update room lights: enable current room and adjacent rooms, disable others
+func set_active_room(room_id: int) -> void:
+	if room_id < 0 or room_id >= rooms.size():
+		return
+	var changed := current_lit_room_id != room_id
+	current_lit_room_id = room_id
+	_update_room_w_sync(room_id)
+	_update_room_lights(room_id)
+	if changed:
+		room_entered.emit(rooms[room_id])
+
+func get_visible_connections(room_id: int) -> Array:
+	var result: Array = []
+	if not room_graph.has(room_id):
+		return result
+	for neighbor in room_graph[room_id]["connections"]:
+		if room_graph[neighbor].get("discovered", true):
+			result.append(neighbor)
+	return result
+
 func _update_room_lights(player_room_id: int) -> void:
-	if player_room_id < 0:
-		return
-	
-	# Get adjacent room IDs from graph
-	var adjacent_ids: Array = []
-	if room_graph.has(player_room_id):
-		adjacent_ids = room_graph[player_room_id]["connections"]
-	
-	# Update all room lights
-	for i in range(rooms.size()):
-		var room = rooms[i]
-		if not is_instance_valid(room):
-			continue
-		
-		# Enable if this is current room or adjacent
-		var should_enable: bool = (i == player_room_id) or (i in adjacent_ids)
-		if room.has_method("set_light_enabled"):
-			room.set_light_enabled(should_enable)
+	var active: Array = [player_room_id] + get_visible_connections(player_room_id)
+	for room in rooms:
+		if is_instance_valid(room):
+			room.set_light_enabled(room.room_id in active)
 
-## Update room W coordinates: sync host room + adjacent rooms to player's W
-## This makes portals see-through regardless of distance (graph-based visibility)
 func _update_room_w_sync(player_room_id: int) -> void:
-	if player_room_id < 0:
+	if player_room_id < 0 or player_room_id >= rooms.size():
 		return
-	
-	# Get current slicer W (player's current slice)
 	var slicer = get_tree().get_first_node_in_group("slicer_4d")
 	var current_w: float = 0.0
-	if slicer and slicer.get("slice_w") != null:
+	if is_instance_valid(player) and player.get("position_4d") != null:
+		current_w = player.position_4d.w
+	elif slicer:
 		current_w = slicer.slice_w
-	
-	# Get adjacent room IDs from graph
-	var adjacent_ids: Array = []
-	if room_graph.has(player_room_id):
-		adjacent_ids = room_graph[player_room_id]["connections"]
-	
-	# Rooms that should be synced to current W (host + adjacent)
-	var synced_ids: Array = [player_room_id] + adjacent_ids
-	
-	print("[LevelGen] W-SYNC: Host room %d, syncing %d rooms to W=%.1f" % [player_room_id, synced_ids.size(), current_w])
-	
-	# Update all room W coordinates
-	for i in range(rooms.size()):
-		var room = rooms[i]
-		if not is_instance_valid(room):
+	var active: Array = [player_room_id] + get_visible_connections(player_room_id)
+	for room in rooms:
+		var id: int = room.room_id
+		var room_w: float = current_w if id in active else _original_room_w[id]
+		room.graph_visible = id in active
+		room.position_4d = Vector4(room.position_4d.x, room.position_4d.y, room.position_4d.z, room_w)
+		room.update_slice(current_w)
+	_last_synced_w = current_w
+	if slicer:
+		slicer.slice_w = current_w
+		slicer.target_w = current_w
+
+func set_secret_scan_enabled(enabled: bool) -> void:
+	secret_scan_enabled = enabled
+	if enabled:
+		_scan_secret_rooms()
+
+func get_secret_hint() -> String:
+	if current_lit_room_id < 0:
+		return ""
+	for id in room_graph[current_lit_room_id]["connections"]:
+		if not room_graph[id].get("discovered", true):
+			return "A hidden scent crosses this room. Q: sniff near the walls."
+	return ""
+
+func _scan_secret_rooms() -> void:
+	if current_lit_room_id < 0 or not is_instance_valid(player):
+		return
+	var host = rooms[current_lit_room_id]
+	for portal in host.portals:
+		var target = portal.target_room
+		if not is_instance_valid(target):
 			continue
-		
-		if i in synced_ids:
-			# Sync to player's current W (make visible)
-			if room.get("position_4d") != null:
-				var old_w: float = room.position_4d.w
-				room.position_4d = Vector4(room.position_4d.x, room.position_4d.y, room.position_4d.z, current_w)
-				if room.get("_position_4d") != null:
-					room._position_4d.w = current_w
-				if room.has_method("update_slice"):
-					room.update_slice(current_w)
-				if old_w != current_w:
-					print("[LevelGen] Room %d synced W: %.1f -> %.1f" % [i, old_w, current_w])
-		else:
-			# Restore to original W (make invisible through portals)
-			if _original_room_w.has(i) and room.get("position_4d") != null:
-				var original_w: float = _original_room_w[i]
-				var current_room_w: float = room.position_4d.w
-				if current_room_w != original_w:
-					room.position_4d = Vector4(room.position_4d.x, room.position_4d.y, room.position_4d.z, original_w)
-					if room.get("_position_4d") != null:
-						room._position_4d.w = original_w
-					if room.has_method("update_slice"):
-						room.update_slice(current_w)  # Use current slice W for visibility calc
-	
-	# Update slicer to refresh all objects
-	if slicer and slicer.has_method("update_all_objects"):
-		slicer.update_all_objects()
+		if room_graph[target.room_id].get("discovered", true):
+			continue
+		if player.global_position.distance_to(portal.global_position) > 12.0:
+			continue
+		room_graph[target.room_id]["discovered"] = true
+		portal.set_available(true)
+		portal.target_portal.set_available(true)
+		host._update_shader_portal_holes()
+		target._update_shader_portal_holes()
+		_update_room_w_sync(current_lit_room_id)
+		_update_room_lights(current_lit_room_id)
+		secret_discovered.emit(target)
 
-## Disable the global directional light
-func _disable_global_light() -> void:
-	var dir_light = get_tree().root.find_child("DirectionalLight3D", true, false)
-	if dir_light:
-		dir_light.visible = false
-		print("[LevelGenerator] Disabled global directional light")
-
-## Generate a new procedural level
 func generate_level(custom_seed: int = 0) -> void:
-	# Clear existing level
 	_clear_level()
-	
-	# Disable global directional light for per-room lighting
-	_disable_global_light()
-	
-	# Set random seed
-	if custom_seed > 0:
-		seed(custom_seed)
+	var directional = get_tree().root.find_child("DirectionalLight3D", true, false)
+	if directional:
+		directional.visible = false
+	if custom_seed != 0:
 		seed_value = custom_seed
-	elif seed_value > 0:
-		seed(seed_value)
-	else:
-		randomize()
-		seed_value = randi()
-		seed(seed_value)
-	
-	print("[LevelGenerator] Generating level with seed: %d" % seed_value)
-	
-	# Generate BRANCHING room graph (maze-like)
+	elif seed_value == 0:
+		_rng.randomize()
+		seed_value = int(_rng.randi())
+	_rng.seed = seed_value
+	layout_style = _rng.randi_range(0, LAYOUT_NAMES.size() - 1)
 	_generate_branching_graph()
-	
-	# Assign room types
 	_assign_room_types()
-	
-	# Spawn room spheres with proper positioning
 	_spawn_rooms_grid()
-	
-	# Connect rooms with portals
 	_create_portals()
-	
-	# Decorate rooms with 3D models (after portals so we know where they are)
 	if enable_decorations:
 		_decorate_rooms()
-	
-	# Notify surfaces of new geometry
 	await get_tree().process_frame
 	_notify_surface_walkers()
-	
-	# Wait another frame to ensure all room _ready() and call_deferred have completed
-	# This is critical for portal visibility at spawn
 	await get_tree().process_frame
-	
-	# Enable light in start room and sync W for adjacent rooms
-	if rooms.size() > 0 and rooms[0].has_method("set_light_enabled"):
-		rooms[0].set_light_enabled(true)
-		# DON'T set current_lit_room_id yet - let _process do it so it triggers a fresh sync
-		# after the player is spawned and positioned
-	
 	level_generated.emit(rooms)
-	
-	print("[LevelGenerator] Level generated with %d rooms" % rooms.size())
+	print("[LevelGenerator] Seed %d: %s, %d connected rooms" % [seed_value, LAYOUT_NAMES[layout_style], rooms.size()])
 
-## Clear all existing rooms
 func _clear_level() -> void:
 	for room in rooms:
 		if is_instance_valid(room):
+			# Remove immediately from queries; deletion completes at end of frame.
+			remove_child(room)
 			room.queue_free()
 	rooms.clear()
 	room_graph.clear()
 	_original_room_w.clear()
+	_key_room_ids.clear()
 	current_lit_room_id = -1
+	_last_synced_w = INF
+	secret_scan_enabled = false
 
-## Generate a BRANCHING room graph (maze-like structure)
+func _new_room_data() -> Dictionary:
+	return {"connections": [], "type": ROOM_NORMAL, "position": Vector3.ZERO,
+		"depth": 0, "parent": -1, "portal_dirs": {}, "discovered": true}
+
 func _generate_branching_graph() -> void:
-	# Create a tree with branches, not a linear path
-	# Start room (0) -> branches out to multiple paths -> Boss at one end
-	
-	var total_rooms := 1 + num_normal_rooms + 4 + 1  # start + normal + 4 special + boss
-	
-	# Initialize empty graph
-	for i in range(total_rooms):
-		room_graph[i] = {
-			"connections": [],
-			"type": ROOM_NORMAL,
-			"position": Vector3.ZERO,
-			"depth": 0  # Distance from start
-		}
-	
-	# Build a branching tree structure
-	# Start room is root at depth 0
-	room_graph[0]["depth"] = 0
-	
-	# Create branches from start
-	var rooms_to_assign: Array = []
-	for i in range(1, total_rooms):
-		rooms_to_assign.append(i)
-	rooms_to_assign.shuffle()
-	
-	# Assign rooms to different depths/branches
-	var current_depth := 1
-	var rooms_at_depth: Dictionary = {0: [0]}  # depth -> [room_ids]
-	var max_depth := 4  # How deep the maze goes
-	
-	var idx := 0
-	while idx < rooms_to_assign.size():
-		var room_id: int = rooms_to_assign[idx]
-		
-		# Determine depth for this room (more rooms at earlier depths)
-		var depth := mini(current_depth, max_depth)
-		if randf() < 0.4:
-			depth = maxi(1, depth - 1)  # Sometimes go shallower for branches
-		
-		room_graph[room_id]["depth"] = depth
-		
-		if not rooms_at_depth.has(depth):
-			rooms_at_depth[depth] = []
-		rooms_at_depth[depth].append(room_id)
-		
-		# Connect to a random room at the previous depth
-		var parent_depth := depth - 1
-		if rooms_at_depth.has(parent_depth) and rooms_at_depth[parent_depth].size() > 0:
-			var parent_id: int = rooms_at_depth[parent_depth].pick_random()
-			_connect_rooms(parent_id, room_id)
-		
-		idx += 1
-		if idx % 2 == 0:  # Advance depth every 2-3 rooms
-			current_depth += 1
+	room_graph.clear()
+	var normal_count := maxi(num_normal_rooms, 1)
+	var total := 1 + normal_count + 4 + 1
+	var main_total := total - 2
+	for id in range(total):
+		room_graph[id] = _new_room_data()
+	# Each new room attaches to an existing connected parent: no skipped depth
+	# can leave an orphan. A degree cap also keeps the shader's eight-hole limit safe.
+	for id in range(1, main_total):
+		var candidates: Array = []
+		for previous in range(id):
+			if room_graph[previous]["connections"].size() < 3:
+				candidates.append(previous)
+		var parent_id: int = candidates[_rng.randi_range(0, candidates.size() - 1)]
+		if layout_style == 1 and _rng.randf() < 0.8:
+			parent_id = candidates.back()
+		elif layout_style == 2:
+			parent_id = candidates.front()
+		_connect_rooms(parent_id, id)
+		room_graph[id]["parent"] = parent_id
+		room_graph[id]["depth"] = room_graph[parent_id]["depth"] + 1
+	# Key purchases are optional side trips. The boss route remains reachable
+	# even after the player spends their last key on the other special room.
+	var boss_candidate := 1
+	for id in range(main_total):
+		if room_graph[id]["depth"] > room_graph[boss_candidate]["depth"]:
+			boss_candidate = id
+	_key_room_ids.clear()
+	for offset in range(2):
+		var id := main_total + offset
+		var candidates: Array[int] = []
+		for previous in range(main_total):
+			if previous != boss_candidate and room_graph[previous]["connections"].size() < 3:
+				candidates.append(previous)
+		var parent_id: int = candidates[_rng.randi_range(0, candidates.size() - 1)]
+		_connect_rooms(parent_id, id)
+		room_graph[id]["parent"] = parent_id
+		room_graph[id]["depth"] = room_graph[parent_id]["depth"] + 1
+		room_graph[id]["type"] = ROOM_ITEM if offset == 0 else ROOM_SHOP
+		_key_room_ids.append(id)
 
-	# Add some extra connections to make it more maze-like (optional loops)
-	for i in range(min(3, total_rooms / 3)):
-		var room_a: int = randi() % total_rooms
-		var room_b: int = randi() % total_rooms
-		if room_a != room_b and abs(room_graph[room_a]["depth"] - room_graph[room_b]["depth"]) <= 1:
-			# Don't duplicate connections
-			if room_b not in room_graph[room_a]["connections"]:
-				_connect_rooms(room_a, room_b)
-
-## Connect two rooms bidirectionally
 func _connect_rooms(a: int, b: int) -> void:
 	if b not in room_graph[a]["connections"]:
 		room_graph[a]["connections"].append(b)
 	if a not in room_graph[b]["connections"]:
 		room_graph[b]["connections"].append(a)
 
-## Assign room types to each room in the graph
 func _assign_room_types() -> void:
-	var total_rooms := room_graph.size()
-	
-	# Find room with highest depth for boss
-	var max_depth := 0
-	var boss_room_id := total_rooms - 1
-	for room_id in room_graph:
-		var depth: int = room_graph[room_id]["depth"]
-		if depth > max_depth:
-			max_depth = depth
-			boss_room_id = room_id
-	
-	# Start room
-	room_graph[0]["type"] = ROOM_NORMAL
-	
-	# Boss room
-	room_graph[boss_room_id]["type"] = ROOM_BOSS
-	
-	# Collect other rooms for special assignment
+	var boss_id := 1
+	for id in room_graph:
+		if id not in _key_room_ids and room_graph[id]["depth"] > room_graph[boss_id]["depth"]:
+			boss_id = id
+	room_graph[boss_id]["type"] = ROOM_BOSS
 	var available: Array = []
-	for i in range(total_rooms):
-		if i != 0 and i != boss_room_id:
-			available.append(i)
-	available.shuffle()
-	
-	# Assign special rooms
-	if available.size() > 0:
-		room_graph[available.pop_front()]["type"] = ROOM_ITEM
-	if available.size() > 0:
-		room_graph[available.pop_front()]["type"] = ROOM_SHOP
-	if available.size() > 0:
-		room_graph[available.pop_front()]["type"] = ROOM_GAMBLING
-	if available.size() > 0:
-		room_graph[available.pop_front()]["type"] = ROOM_SPECIAL
-	
-	# Pre-calculate size multipliers for each room (including random enlargement)
-	# This MUST happen before positioning so touch distances are correct
-	for room_id in room_graph:
-		var room_type: int = room_graph[room_id]["type"]
-		var size_mult: float = ROOM_SIZES.get(room_type, 1.0)
-		if room_type == ROOM_NORMAL:
-			size_mult = randf_range(1.0, 2.0)  # Normal rooms vary from 1x to 2x
-		room_graph[room_id]["size_mult"] = size_mult
+	for id in room_graph:
+		if id != 0 and id != boss_id and id not in _key_room_ids:
+			available.append(id)
+	_shuffle(available)
+	for type in [ROOM_GAMBLING, ROOM_SPECIAL]:
+		room_graph[available.pop_back()]["type"] = type
+	for id in room_graph:
+		var type: int = room_graph[id]["type"]
+		room_graph[id]["size_mult"] = _rng.randf_range(1.0, 1.8) if type == ROOM_NORMAL else ROOM_SIZES[type]
+		room_graph[id]["biome"] = _rng.randi_range(0, 2)
+	# Secrets are optional leaves; the route to the boss never requires discovery.
+	for secret_index in range(num_secret_rooms):
+		var candidates: Array = []
+		for id in room_graph:
+			if id != boss_id and room_graph[id]["type"] != ROOM_SECRET and room_graph[id]["connections"].size() < 3:
+				candidates.append(id)
+		var parent_id: int = candidates[_rng.randi_range(0, candidates.size() - 1)]
+		var id := room_graph.size()
+		room_graph[id] = _new_room_data()
+		room_graph[id].merge({"type": ROOM_SECRET, "parent": parent_id, "discovered": false,
+			"depth": room_graph[parent_id]["depth"] + 1, "size_mult": 0.8, "biome": 2,
+			"home_w": -(secret_index + 1) * W_SPACING}, true)
+		_connect_rooms(parent_id, id)
 
-## Check if a proposed room position overlaps with any already-placed rooms
-## Returns true if there is NO overlap (position is valid)
-## Allows overlap for rooms 2+ graph edges apart (they'll be in different W slices)
-func _is_position_valid(proposed_pos: Vector3, proposed_radius: float, room_positions: Dictionary, new_room_id: int, parent_room_id: int = -1) -> bool:
-	for existing_room_id in room_positions:
-		if existing_room_id == parent_room_id:
+func _shuffle(values: Array) -> void:
+	for i in range(values.size() - 1, 0, -1):
+		var j := _rng.randi_range(0, i)
+		var old = values[i]
+		values[i] = values[j]
+		values[j] = old
+
+func _get_graph_distance(a: int, b: int) -> int:
+	if a == b:
+		return 0
+	var visited: Dictionary = {a: 0}
+	var pending: Array = [a]
+	while not pending.is_empty():
+		var id: int = pending.pop_front()
+		for neighbor in room_graph[id]["connections"]:
+			if neighbor == b:
+				return visited[id] + 1
+			if not visited.has(neighbor):
+				visited[neighbor] = visited[id] + 1
+				pending.append(neighbor)
+	return 999
+
+func _is_position_valid(pos: Vector3, radius: float, positions: Dictionary, id: int, parent_id: int = -1) -> bool:
+	for other in positions:
+		if other == parent_id or _get_graph_distance(id, other) >= 3:
 			continue
-		
-		# Allow overlap for rooms 3+ graph distance apart (BFS distance check)
-		# Distance 1-2 can be visible together (via W-sync when in shared neighbor)
-		var graph_dist: int = _get_graph_distance(new_room_id, existing_room_id)
-		if graph_dist >= 3:
-			continue  # These rooms can never be visible together, overlap is OK
-		
-		var existing_pos: Vector4D = room_positions[existing_room_id]
-		var existing_radius: float = base_room_radius * room_graph[existing_room_id].get("size_mult", 1.0)
-		
-		# Calculate distance between room centers
-		var dist: float = proposed_pos.distance_to(existing_pos.to_vector3())
-		
-		# Minimum allowed distance: sum of radii (touching is OK, overlapping is not)
-		# Use a small buffer (0.5) to prevent tangent issues
-		var min_dist: float = proposed_radius + existing_radius - 0.5
-		
-		if dist < min_dist:
-			return false  # Overlap detected
+		var other_radius: float = base_room_radius * room_graph[other]["size_mult"]
+		if pos.distance_to(positions[other]) < radius + other_radius + 0.25:
+			return false
 	return true
 
-## Get the shortest graph distance between two rooms using BFS
-func _get_graph_distance(room_a: int, room_b: int) -> int:
-	if room_a == room_b:
-		return 0
-	if not room_graph.has(room_a) or not room_graph.has(room_b):
-		return 999  # Unknown rooms treated as far apart
-	
-	# BFS from room_a to room_b
-	var visited: Dictionary = {room_a: 0}
-	var queue: Array = [room_a]
-	
-	while queue.size() > 0:
-		var current: int = queue.pop_front()
-		var current_dist: int = visited[current]
-		
-		for neighbor in room_graph[current]["connections"]:
-			if neighbor == room_b:
-				return current_dist + 1
-			if not visited.has(neighbor):
-				visited[neighbor] = current_dist + 1
-				queue.append(neighbor)
-	
-	return 999  # Not connected
-
-## Spawn room spheres with W-axis positioning
-## Rooms touch at portal points, each at different W coordinate
-func _spawn_rooms_grid() -> void:
-	# Start room at origin with W=0
-	# Other rooms positioned so spheres touch at portal connection points
-	
-	# First pass: create all rooms with initial positions
-	# Room 0 is at origin
-	var room_positions: Dictionary = {}  # room_id -> Vector4D (x, y, z, w)
-	var placed_rooms: Array = [0]  # IDs of rooms already positioned
-	room_positions[0] = Vector4D.zero()
-	
-	# BFS to position rooms based on connections to already-placed rooms
-	var to_process: Array = [0]
-	while to_process.size() > 0:
-		var current_id: int = to_process.pop_front()
-		var connections: Array = room_graph[current_id]["connections"]
-		
-		for target_id in connections:
-			if target_id in placed_rooms:
+func _layout_positions() -> Dictionary:
+	var positions: Dictionary = {0: Vector3.ZERO}
+	for id in room_graph:
+		room_graph[id]["portal_dirs"] = {}
+	for id in range(1, room_graph.size()):
+		var parent_id: int = room_graph[id]["parent"]
+		var parent_pos: Vector3 = positions[parent_id]
+		var radius: float = base_room_radius * room_graph[id]["size_mult"]
+		var distance: float = radius + base_room_radius * room_graph[parent_id]["size_mult"]
+		var found := false
+		for attempt in range(256):
+			var direction := Vector3(_rng.randf_range(-1, 1), _rng.randf_range(-0.8, 0.8), _rng.randf_range(-1, 1)).normalized()
+			if direction.length_squared() < 0.5:
 				continue
-			
-			# Position target room so it touches current room at portal
-			var current_pos: Vector4D = room_positions[current_id]
-			# Use pre-calculated size multipliers (includes random enlargement)
-			var current_radius: float = base_room_radius * room_graph[current_id].get("size_mult", 1.0)
-			var target_radius: float = base_room_radius * room_graph[target_id].get("size_mult", 1.0)
-			
-			# Distance between centers so spheres just touch
-			var touch_distance: float = current_radius + target_radius
-			
-			# Try multiple directions to find a non-overlapping position
-			var max_attempts: int = 50
-			var portal_dir: Vector3 = Vector3.ZERO
-			var target_xyz: Vector3 = Vector3.ZERO
-			var found_valid_position: bool = false
-			
-			for attempt in range(max_attempts):
-				# Random direction for portal placement (on sphere surface)
-				portal_dir = Vector3(
-					randf_range(-1, 1),
-					randf_range(-0.5, 0.5),  # Prefer more horizontal
-					randf_range(-1, 1)
-				).normalized()
-				
-				# Check if this portal direction is too close to any existing portals in current_id
-				var direction_too_close := false
-				if room_graph[current_id].has("portal_dirs"):
-					var min_dot := 0.64  # cos(50 degrees)
-					if attempt >= 40:
-						min_dot = 0.94  # Enforce at least 20 degrees spacing
-					elif attempt >= 25:
-						min_dot = 0.82  # cos(35 degrees)
-					
-					for existing_target_id in room_graph[current_id]["portal_dirs"]:
-						var existing_dir: Vector3 = room_graph[current_id]["portal_dirs"][existing_target_id]
-						if portal_dir.dot(existing_dir) > min_dot:
-							direction_too_close = true
-							break
-				
-				if direction_too_close:
-					continue
-				
-				# Position target room center at touch distance from current room
-				target_xyz = current_pos.to_vector3() + portal_dir * touch_distance
-				
-				# Check for overlaps with all already-placed rooms (except current)
-				if _is_position_valid(target_xyz, target_radius, room_positions, target_id, current_id):
-					found_valid_position = true
-					break
-				elif attempt == max_attempts - 1:
-					# Last attempt: push the room further out to avoid overlap
-					var push_distance: float = touch_distance * 1.5
-					target_xyz = current_pos.to_vector3() + portal_dir * push_distance
-					print("[LevelGen] Room %d pushed further to avoid overlap" % target_id)
-			
-			# Each room gets unique W coordinate for 4D slice separation
-			var target_w: float = target_id * W_SPACING
-			
-			room_positions[target_id] = Vector4D.new(target_xyz.x, target_xyz.y, target_xyz.z, target_w)
-			
-			# Store portal direction for later
-			if not room_graph[current_id].has("portal_dirs"):
-				room_graph[current_id]["portal_dirs"] = {}
-			room_graph[current_id]["portal_dirs"][target_id] = portal_dir
-			
-			if not room_graph[target_id].has("portal_dirs"):
-				room_graph[target_id]["portal_dirs"] = {}
-			room_graph[target_id]["portal_dirs"][current_id] = -portal_dir
-			
-			placed_rooms.append(target_id)
-			to_process.append(target_id)
-	# FALLBACK: Position any rooms not placed by BFS
-	# This handles disconnected graphs or rooms not reachable from room 0
-	for room_id in range(room_graph.size()):
-		if not room_positions.has(room_id):
-			# Place radially from origin to avoid overlap
-			var angle: float = (room_id * 2.0 * PI) / room_graph.size()
-			var radius_offset: float = 100.0 + room_id * 50.0  # Spread out
-			var fallback_pos := Vector3(
-				cos(angle) * radius_offset,
-				randf_range(-20, 20),
-				sin(angle) * radius_offset
-			)
-			var fallback_w: float = room_id * W_SPACING
-			room_positions[room_id] = Vector4D.new(fallback_pos.x, fallback_pos.y, fallback_pos.z, fallback_w)
-			print("[LevelGen] WARNING: Room %d not in BFS, placed at fallback position %s" % [room_id, fallback_pos])
-	
-	# Second pass: Create room nodes
-	for room_id in range(room_graph.size()):
-		var room_type: int = room_graph[room_id]["type"]
-		var pos_4d: Vector4D = room_positions.get(room_id, Vector4D.zero())
-		
-		# Final safety check - don't allow (0,0,0) for non-origin rooms
-		if room_id > 0 and pos_4d.to_vector3().length() < 1.0:
-			push_error("[LevelGen] BUG: Room %d has invalid position near origin!" % room_id)
-		
-		room_graph[room_id]["position"] = pos_4d.to_vector3()
-		room_graph[room_id]["w"] = pos_4d.w
-		
-		# Create room sphere
-		var room = _create_room(room_id, room_type, pos_4d)
+			var candidate := parent_pos + direction * distance
+			if not _is_position_valid(candidate, radius, positions, id, parent_id):
+				continue
+			positions[id] = candidate
+			room_graph[parent_id]["portal_dirs"][id] = direction
+			room_graph[id]["portal_dirs"][parent_id] = -direction
+			found = true
+			break
+		if not found:
+			return {}
+	return positions
+
+func _spawn_rooms_grid() -> void:
+	var positions: Dictionary = {}
+	for attempt in range(16):
+		positions = _layout_positions()
+		if not positions.is_empty():
+			break
+	if positions.is_empty():
+		positions = _fallback_positions()
+	for id in range(room_graph.size()):
+		var pos: Vector3 = positions[id]
+		var home_w: float = room_graph[id].get("home_w", id * maxf(W_SPACING, base_room_radius * 5.0))
+		room_graph[id]["position"] = pos
+		room_graph[id]["w"] = home_w
+		room_graph[id]["depth"] = _get_graph_distance(0, id)
+		for neighbor in room_graph[id]["connections"]:
+			room_graph[id]["portal_dirs"][neighbor] = (positions[neighbor] - pos).normalized()
+		var room := _create_room(id, room_graph[id]["type"], Vector4D.from_vector3(pos, home_w))
 		rooms.append(room)
-		
-		# Add to scene
 		add_child(room)
 
-## Create a single room sphere using script loading
-func _create_room(room_id: int, room_type: int, pos_4d: Vector4D) -> Node:
-	var RoomSphereScript = load("res://scripts/geometry4d/room_sphere4d.gd")
-	var room = RoomSphereScript.new()
-	room.room_id = room_id
-	room.room_type = room_type
+func _fallback_positions() -> Dictionary:
+	# Guaranteed contiguous fallback, never a detached room or stretched doorway.
+	# Preserve room roles; the boss remains the end of the main path.
+	var main_ids: Array = []
+	var boss_id := -1
+	for id in room_graph:
+		room_graph[id]["connections"] = []
+		room_graph[id]["portal_dirs"] = {}
+		if room_graph[id]["type"] == ROOM_BOSS:
+			boss_id = id
+		elif room_graph[id]["type"] not in [ROOM_SECRET, ROOM_ITEM, ROOM_SHOP]:
+			main_ids.append(id)
+	main_ids.append(boss_id)
+	var positions: Dictionary = {0: Vector3.ZERO}
+	for i in range(1, main_ids.size()):
+		var id: int = main_ids[i]
+		var previous: int = main_ids[i - 1]
+		_connect_rooms(previous, id)
+		room_graph[id]["parent"] = previous
+		positions[id] = positions[previous] + Vector3.RIGHT * base_room_radius * (room_graph[previous]["size_mult"] + room_graph[id]["size_mult"])
+	var purchase_index := 0
+	for id in room_graph:
+		if room_graph[id]["type"] in [ROOM_ITEM, ROOM_SHOP]:
+			var previous: int = main_ids[purchase_index]
+			var direction := Vector3.DOWN if purchase_index == 0 else Vector3.BACK
+			purchase_index += 1
+			_connect_rooms(previous, id)
+			room_graph[id]["parent"] = previous
+			positions[id] = positions[previous] + direction * base_room_radius * (room_graph[previous]["size_mult"] + room_graph[id]["size_mult"])
+	var secret_count := 0
+	for id in room_graph:
+		if room_graph[id]["type"] == ROOM_SECRET:
+			var previous: int = main_ids[secret_count]
+			secret_count += 1
+			_connect_rooms(previous, id)
+			room_graph[id]["parent"] = previous
+			positions[id] = positions[previous] + Vector3.UP * base_room_radius * (room_graph[previous]["size_mult"] + room_graph[id]["size_mult"])
+	return positions
+
+func _create_room(id: int, type: int, pos: Vector4D) -> Node:
+	var room := RoomSphere4D.new()
+	room.room_id = id
+	room.room_type = type
+	room.key_locked = type in [ROOM_ITEM, ROOM_SHOP]
 	room.radius = base_room_radius
-	
-	# Use pre-calculated size multiplier from graph (already includes random enlargement)
-	var size_mult: float = room_graph[room_id].get("size_mult", ROOM_SIZES.get(room_type, 1.0))
-	room.size_multiplier = size_mult
-	
-	# Set color
-	var color: Color = ROOM_COLORS.get(room_type, Color(0.2, 0.8, 1.0))
-	room.room_color = color
-	room.glow_color = color
-	
-	# Set 4D position with W coordinate (convert Vector4D to Vector4 for export setter)
-	room.position_4d = pos_4d.to_vector4()
-	room.position = pos_4d.to_vector3() # Use local position as it's not in tree yet
-	room.name = "Room_%d" % room_id
-	
-	# Slice threshold based on room radius
-	room.slice_threshold = room.radius * size_mult
-	
-	# Store original W for host-room sync system
-	_original_room_w[room_id] = pos_4d.w
-	
-	# DEBUG: Log room creation
-	print("[LevelGen] Created %s: 3D pos=%s, W=%.1f, radius=%.1f" % [room.name, pos_4d.to_vector3(), pos_4d.w, room.radius * size_mult])
-	
+	room.size_multiplier = room_graph[id]["size_mult"]
+	room.room_color = ROOM_COLORS[type]
+	room.glow_color = ROOM_COLORS[type]
+	room.biome = room_graph[id]["biome"]
+	room.graph_visible = id == 0
+	room.position_4d = pos.to_vector4()
+	room.name = "Room_%d" % id
+	room.slice_threshold = room.radius * room.size_multiplier
+	_original_room_w[id] = pos.w
 	return room
 
-## Create portal doors between connected rooms
 func _create_portals() -> void:
-	var PortalDoorScript = load("res://scripts/level/portal_door.gd")
-	var created_pairs: Dictionary = {}
-	
-	for room_id in room_graph:
-		var connections: Array = room_graph[room_id]["connections"]
-		var portal_dirs: Dictionary = room_graph[room_id].get("portal_dirs", {})
-		
-		for target_id in connections:
-			# Skip if pair already created
-			var pair_key := "%d_%d" % [mini(room_id, target_id), maxi(room_id, target_id)]
-			if created_pairs.has(pair_key):
-				continue
-			created_pairs[pair_key] = true
-			
-			# Get rooms
-			if room_id >= rooms.size() or target_id >= rooms.size():
-				continue
-			
-			var source_room = rooms[room_id]
-			var target_room = rooms[target_id]
-			
-			# Get stored portal direction, or calculate if missing
-			var direction: Vector3 = portal_dirs.get(target_id, Vector3.ZERO)
-			if direction.length_squared() < 0.01:
-				var base_dir = (target_room.global_position - source_room.global_position).normalized()
-				direction = _find_loop_portal_direction(source_room, target_room, base_dir)
-			
-			# Create portal pair with W coordinates
-			_create_portal_pair(PortalDoorScript, source_room, target_room, direction)
+	var portal_script = load("res://scripts/level/portal_door.gd")
+	for id in room_graph:
+		for target_id in room_graph[id]["connections"]:
+			if target_id > id:
+				_create_portal_pair(portal_script, rooms[id], rooms[target_id], room_graph[id]["portal_dirs"][target_id])
 
-## Create a pair of connected portal doors
-func _create_portal_pair(PortalDoorScript: Script, source_room: Node, target_room: Node, direction: Vector3) -> void:
-	# Create source portal
-	var source_portal = PortalDoorScript.new()
-	source_portal.name = "Portal_%d_to_%d" % [source_room.room_id, target_room.room_id]
-	source_room.add_child(source_portal)
-	source_portal.position_on_sphere(source_room, direction)
-	source_portal.set_color_from_room_type(target_room.room_type)
-	source_portal.target_room = target_room
-	source_room.add_portal(source_portal)
-	
-	# Create target portal
-	var target_portal = PortalDoorScript.new()
-	target_portal.name = "Portal_%d_to_%d" % [target_room.room_id, source_room.room_id]
-	target_room.add_child(target_portal)
-	target_portal.position_on_sphere(target_room, -direction)
-	target_portal.set_color_from_room_type(source_room.room_type)
-	target_portal.target_room = source_room
-	target_room.add_portal(target_portal)
-	
-	# Link portals together and activate see-through rendering
-	source_portal.link_to_portal(target_portal)
+func _create_portal_pair(portal_script: Script, source: Node, target: Node, direction: Vector3) -> void:
+	var first = portal_script.new()
+	first.name = "Portal_%d_to_%d" % [source.room_id, target.room_id]
+	source.add_child(first)
+	first.position_on_sphere(source, direction)
+	first.set_color_from_room_type(target.room_type)
+	first.target_room = target
+	source.add_portal(first)
+	var second = portal_script.new()
+	second.name = "Portal_%d_to_%d" % [target.room_id, source.room_id]
+	target.add_child(second)
+	second.position_on_sphere(target, -direction)
+	second.set_color_from_room_type(source.room_type)
+	second.target_room = source
+	target.add_portal(second)
+	first.link_to_portal(second)
+	var available: bool = room_graph[source.room_id]["discovered"] and room_graph[target.room_id]["discovered"]
+	first.set_available(available)
+	second.set_available(available)
 
-## Find a direction for a loop connection portal that doesn't overlap with existing portals in either room
-func _find_loop_portal_direction(source_room: Node, target_room: Node, base_dir: Vector3) -> Vector3:
-	var max_attempts := 50
-	var source_portals = source_room.get_portals()
-	var target_portals = target_room.get_portals()
-	
-	for attempt in range(max_attempts):
-		var min_dot := 0.64  # cos(50 degrees)
-		if attempt >= 40:
-			min_dot = 0.94  # cos(20 degrees)
-		elif attempt >= 25:
-			min_dot = 0.82  # cos(35 degrees)
-			
-		var candidate: Vector3
-		if attempt == 0:
-			candidate = base_dir
-		else:
-			var jitter := Vector3(
-				randf_range(-1, 1),
-				randf_range(-0.5, 0.5),
-				randf_range(-1, 1)
-			).normalized() * (float(attempt) / max_attempts)
-			candidate = (base_dir + jitter).normalized()
-			
-		var too_close := false
-		for portal in source_portals:
-			if not is_instance_valid(portal):
-				continue
-			var portal_dir: Vector3 = (portal.global_position - source_room.global_position).normalized()
-			if candidate.dot(portal_dir) > min_dot:
-				too_close = true
-				break
-				
-		if too_close:
-			continue
-			
-		for portal in target_portals:
-			if not is_instance_valid(portal):
-				continue
-			var portal_dir: Vector3 = (portal.global_position - target_room.global_position).normalized()
-			if (-candidate).dot(portal_dir) > min_dot:
-				too_close = true
-				break
-				
-		if not too_close:
-			return candidate
-			
-	return base_dir
-
-## Decorate all rooms with 3D model props on their interior surfaces
 func _decorate_rooms() -> void:
 	if not _decorator:
 		_decorator = RoomDecorator.new()
-	
-	for room_id in range(rooms.size()):
-		var room = rooms[room_id]
-		if not is_instance_valid(room):
-			continue
-		
-		var room_type: int = room_graph[room_id]["type"]
-		var portal_positions: Array = room.get_portal_positions() if room.has_method("get_portal_positions") else []
-		
-		_decorator.decorate_room(room, room_type, portal_positions)
-	
-	print("[LevelGenerator] Room decoration complete")
+	_decorator.set_seed(seed_value)
+	for room in rooms:
+		_decorator.decorate_room(room, room.room_type, room.get_portal_positions())
 
-## Notify all surface walkers to refresh their surface list
 func _notify_surface_walkers() -> void:
 	for walker in get_tree().get_nodes_in_group("surface_walkers_4d"):
 		if walker.has_method("refresh_surfaces"):
 			walker.refresh_surfaces()
 
-## Spawn player in start room (at CENTER so they fall to surface)
 func spawn_player_in_start_room() -> void:
 	player = get_tree().get_first_node_in_group("player")
-	if not player:
-		print("[LevelGenerator] No player found!")
+	if not player or rooms.is_empty():
 		return
-	
-	if rooms.is_empty():
-		print("[LevelGenerator] No rooms to spawn player in!")
-		return
-	
-	# Spawn in first room (start room)
-	var start_room = rooms[0]
-	var spawn_pos: Vector3 = start_room.get_spawn_position()
-	
-	# Just teleport the player - NO 4D mode, just simple 3D
-	player.global_position = spawn_pos
-	
-	print("[LevelGenerator] Player spawned at: %s" % str(spawn_pos))
-	player_spawned.emit(start_room)
+	var start = rooms[0]
+	player.global_position = start.get_spawn_position()
+	if player.has_method("set_position_4d"):
+		player.set_position_4d(Vector4D.from_vector3(player.global_position, 0.0))
+	elif player.get("position_4d") != null:
+		player.position_4d = Vector4D.from_vector3(player.global_position, 0.0)
+	player.basis = Basis.IDENTITY
+	if player.get("velocity") != null:
+		player.velocity = Vector3.ZERO
+	if player.get("external_velocity") != null:
+		player.external_velocity = Vector3.ZERO
+	if player.get("current_gravity_up") != null:
+		player.current_gravity_up = Vector3.UP
+	if player.get("sphere_facing") != null:
+		player.sphere_facing = Vector3.FORWARD
+	for field in ["current_momentum", "bhop_window_timer", "frozen_timer"]:
+		if player.get(field) != null:
+			player.set(field, 0.0)
+	for field in ["is_sliding", "was_grounded_last_frame"]:
+		if player.get(field) != null:
+			player.set(field, false)
+	if player.has_meta("active_room_id"):
+		player.set_meta("active_room_id", 0)
+	set_active_room(0)
+	player_spawned.emit(start)
 
-## Get room by ID
-func get_room(room_id: int) -> Node:
-	if room_id >= 0 and room_id < rooms.size():
-		return rooms[room_id]
-	return null
+func get_room(id: int) -> Node:
+	return rooms[id] if id >= 0 and id < rooms.size() else null
 
-## Get start room
 func get_start_room() -> Node:
 	return get_room(0)
 
-## Get boss room
 func get_boss_room() -> Node:
-	# Find room with BOSS type
 	for room in rooms:
 		if room.room_type == ROOM_BOSS:
 			return room

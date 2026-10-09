@@ -1,0 +1,106 @@
+{
+  "style": "Original flat-shaded breed models",
+  "forward": "Godot -Z",
+  "assets": [
+    {
+      "id": "xoloitzcuintli",
+      "name": "Xoloitzcuintli",
+      "triangles": 1144
+    },
+    {
+      "id": "chinese_crested",
+      "name": "Chinese Crested",
+      "triangles": 1464
+    },
+    {
+      "id": "peruvian_inca_orchid",
+      "name": "Peruvian Inca Orchid",
+      "triangles": 1212
+    },
+    {
+      "id": "american_hairless_terrier",
+      "name": "American Hairless Terrier",
+      "triangles": 1144
+    },
+    {
+      "id": "komondor",
+      "name": "Komondor",
+      "triangles": 1636
+    },
+    {
+      "id": "puli",
+      "name": "Puli",
+      "triangles": 1776
+    },
+    {
+      "id": "bergamasco_shepherd",
+      "name": "Bergamasco Shepherd",
+      "triangles": 2236
+    },
+    {
+      "id": "bedlington_terrier",
+      "name": "Bedlington Terrier",
+      "triangles": 1284
+    },
+    {
+      "id": "bull_terrier",
+      "name": "Bull Terrier",
+      "triangles": 1116
+    },
+    {
+      "id": "neapolitan_mastiff",
+      "name": "Neapolitan Mastiff",
+      "triangles": 1588
+    },
+    {
+      "id": "shar_pei",
+      "name": "Shar-Pei",
+      "triangles": 1488
+    },
+    {
+      "id": "brussels_griffon",
+      "name": "Brussels Griffon",
+      "triangles": 2024
+    },
+    {
+      "id": "affenpinscher",
+      "name": "Affenpinscher",
+      "triangles": 1236
+    },
+    {
+      "id": "borzoi",
+      "name": "Borzoi",
+      "triangles": 1192
+    },
+    {
+      "id": "afghan_hound",
+      "name": "Afghan Hound",
+      "triangles": 1448
+    },
+    {
+      "id": "saluki",
+      "name": "Saluki",
+      "triangles": 1192
+    },
+    {
+      "id": "azawakh",
+      "name": "Azawakh",
+      "triangles": 1192
+    },
+    {
+      "id": "norwegian_lundehund",
+      "name": "Norwegian Lundehund",
+      "triangles": 1440
+    },
+    {
+      "id": "otterhound",
+      "name": "Otterhound",
+      "triangles": 1344
+    },
+    {
+      "id": "dandie_dinmont_terrier",
+      "name": "Dandie Dinmont Terrier",
+      "triangles": 1156
+    }
+  ]
+}

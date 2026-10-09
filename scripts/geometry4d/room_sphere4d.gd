@@ -13,8 +13,16 @@ extends Object4D
 ## Room identifier for level graph
 var room_id: int = 0
 
+## The generator keeps unrelated, potentially overlapping W layers hidden.
+var graph_visible: bool = true
+var biome: int = 0
+
 ## Connected portal doors
 var portals: Array = []
+var combat_locked: bool = false
+## A special room is purchased once; every entrance shares this floor-local state.
+var key_locked: bool = false
+var _unlock_in_progress: bool = false
 
 ## Size multiplier (1.0 = base, 1.5 = large normal, 2.0 = boss)
 var size_multiplier: float = 1.0
@@ -54,6 +62,16 @@ func _ready() -> void:
 	# Create sun light at center
 	_create_sun_light()
 
+func _exit_tree() -> void:
+	# The slicer and debug ghost live outside the generated room subtree.
+	# Retire both when advancing a floor or restarting a run.
+	for slicer in get_tree().get_nodes_in_group("slicer_4d"):
+		if slicer.has_method("unregister_object"):
+			slicer.unregister_object(self)
+	if is_instance_valid(ghost_mesh):
+		ghost_mesh.queue_free()
+		ghost_mesh = null
+
 func _create_mesh() -> void:
 	mesh_instance = MeshInstance3D.new()
 	
@@ -73,7 +91,8 @@ func _create_mesh() -> void:
 		shader_mat.shader = shader
 		
 		# Set base properties - white albedo to not tint texture
-		shader_mat.set_shader_parameter("albedo_color", Color.WHITE)
+		var biome_colors := [Color(1.0, 1.03, 0.94), Color(1.08, 0.98, 0.80), Color(0.85, 1.02, 1.04)]
+		shader_mat.set_shader_parameter("albedo_color", biome_colors[biome % biome_colors.size()])
 		shader_mat.set_shader_parameter("emission_color", glow_color * 0.3)
 		shader_mat.set_shader_parameter("emission_strength", 0.15)
 		shader_mat.set_shader_parameter("uv_scale", Vector2(8.0, 4.0))
@@ -158,8 +177,40 @@ func set_light_enabled(enabled: bool) -> void:
 func add_portal(portal: Node) -> void:
 	if portal and portal not in portals:
 		portals.append(portal)
+		if combat_locked and portal.has_method("set_combat_lock"):
+			portal.set_combat_lock(self, true)
+		if key_locked and portal.has_method("set_key_lock"):
+			portal.set_key_lock(self, true)
 		# Defer shader update to next frame so portal position is set
 		call_deferred("_update_shader_portal_holes")
+
+## Combat seals are independent of whether a secret doorway was discovered.
+func set_combat_locked(enabled: bool, entering_player: Node3D = null) -> void:
+	if combat_locked == enabled:
+		return
+	combat_locked = enabled
+	for portal in portals:
+		if is_instance_valid(portal) and portal.has_method("set_combat_lock"):
+			portal.set_combat_lock(self, enabled, entering_player)
+
+func set_key_locked(enabled: bool) -> void:
+	key_locked = enabled
+	for portal in portals:
+		if is_instance_valid(portal) and portal.has_method("set_key_lock"):
+			portal.set_key_lock(self, enabled)
+
+## There is no yield between spending and unlocking, so paired interactions
+## cannot charge the same room twice. Combat owners remain untouched.
+func unlock_with_key(run: Node) -> bool:
+	if not key_locked or _unlock_in_progress or not is_instance_valid(run) or not run.has_method("spend_key"):
+		return false
+	_unlock_in_progress = true
+	if not run.spend_key():
+		_unlock_in_progress = false
+		return false
+	set_key_locked(false)
+	_unlock_in_progress = false
+	return true
 
 ## Update the shader with portal positions for hole rendering
 func _update_shader_portal_holes() -> void:
@@ -179,6 +230,10 @@ func _update_shader_portal_holes() -> void:
 	for portal in portals:
 		if not is_instance_valid(portal):
 			continue
+		if portal.get("available") == false:
+			continue
+		if positions.size() >= 8:
+			break
 		# Portal position relative to room center (local space)
 		var local_pos: Vector3 = portal.global_position - global_position
 		var portal_radius: float = portal.portal_radius if portal.get("portal_radius") else 2.0
@@ -187,7 +242,6 @@ func _update_shader_portal_holes() -> void:
 		positions.append(local_pos)
 		radii.append(portal_radius)
 		
-		print("[RoomSphere] Portal hole at local_pos=%s, radius=%.1f (room=%s)" % [local_pos, portal_radius, name])
 	
 	# Update shader uniforms
 	shader_mat.set_shader_parameter("portal_count", positions.size())
@@ -200,7 +254,6 @@ func _update_shader_portal_holes() -> void:
 	shader_mat.set_shader_parameter("portal_positions", positions)
 	shader_mat.set_shader_parameter("portal_radii", radii)
 	
-	print("[RoomSphere] Updated shader with %d portal holes for %s" % [portals.size(), name])
 
 ## Get all portals connected to this room
 func get_portals() -> Array:
@@ -209,17 +262,16 @@ func get_portals() -> Array:
 # Override to update mesh when slice changes
 func update_slice(slice_w: float) -> void:
 	super.update_slice(slice_w)
+	_update_visibility()
 	_update_slice_mesh(slice_w)
+
+func _update_visibility() -> void:
+	visible = is_in_slice and graph_visible
 
 func _update_slice_mesh(slice_w: float) -> void:
 	# Standard 4D slicing - room visible when player's W is within radius
 	# W-sync from portals ensures destination rooms are visible by moving their W coordinate
 	var w_distance: float = abs(_position_4d.w - slice_w)
-	
-	# DEBUG: Show visibility calculation
-	var will_be_visible: bool = w_distance < radius
-	if name.begins_with("Room"):
-		print("[Room] %s: _position_4d.w=%.1f, slice_w=%.1f, w_dist=%.1f, radius=%.1f -> visible=%s" % [name, _position_4d.w, slice_w, w_distance, radius, will_be_visible])
 	
 	# Room is visible if within radius
 	if w_distance >= radius:
@@ -286,8 +338,8 @@ func _create_ghost_mesh() -> void:
 	ghost_mesh = MeshInstance3D.new()
 	
 	var sphere_mesh := SphereMesh.new()
-	sphere_mesh.radius = radius / size_multiplier  # Use base radius for ghost
-	sphere_mesh.height = (radius / size_multiplier) * 2
+	sphere_mesh.radius = radius
+	sphere_mesh.height = radius * 2
 	sphere_mesh.radial_segments = 32
 	sphere_mesh.rings = 16
 	ghost_mesh.mesh = sphere_mesh
